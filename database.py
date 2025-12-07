@@ -8,19 +8,12 @@ MASTER_DB_URL = (
     "postgresql://postgres:Jiajun07@@2025@localhost:5432/sdsm_master"
 )
 
-MASTER_DSN = (
-    "dbname=sdsm_master user=postgres "
-    "password=Jiajun07@@2025 host=localhost port=5432"
-)
-
-SUPER_DSN = (
-    "dbname=postgres user=postgres "
-    "password=Jiajun07@@2025 host=localhost port=5432"
-)
+MASTER_DSN = "dbname=sdsm_master user=postgres password=Jiajun07@@2025 host=localhost port=5432"
+SUPER_DSN  = "dbname=postgres    user=postgres password=Jiajun07@@2025 host=localhost port=5432"
 
 
 def create_tenant(company_name: str, admin_email: str, admin_password: str):
-    # 1) insert tenant row in sdsm_master and get id
+    # 1) insert tenant row and get id + db_name
     with psycopg2.connect(MASTER_DSN) as master_conn:
         with master_conn.cursor() as cur:
             cur.execute(
@@ -42,17 +35,21 @@ def create_tenant(company_name: str, admin_email: str, admin_password: str):
                 """,
                 (db_name, tenant_id),
             )
+        # master_conn is committed automatically when the with-block exits
 
-    # 2) create the tenant database (needs superuser)
-    with psycopg2.connect(SUPER_DSN) as super_conn:
-        super_conn.autocommit = True
+    # 2) CREATE DATABASE – separate autocommit connection
+    super_conn = psycopg2.connect(SUPER_DSN)
+    super_conn.autocommit = True          # critical line
+    try:
         with super_conn.cursor() as cur:
             cur.execute(f'CREATE DATABASE "{db_name}";')
+    finally:
+        super_conn.close()
 
-    # 3) create tables inside the new tenant database
+    # 3) connect to tenant DB and create tables + admin
     tenant_dsn = (
-        f'dbname={db_name} user=postgres '
-        f'password=Jiajun07@@2025 host=localhost port=5432'
+        f"dbname={db_name} user=postgres "
+        f"password=Jiajun07@@2025 host=localhost port=5432"
     )
     with psycopg2.connect(tenant_dsn) as tenant_conn:
         with tenant_conn.cursor() as cur:

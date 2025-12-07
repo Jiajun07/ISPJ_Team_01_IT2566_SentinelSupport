@@ -1,8 +1,8 @@
 When adding any new platform of implementations, Add to this page
 1. Python language through extension
 2. pip install flask sqlalchemy psycopg2-binary
-3. 
-4. 
+3. pip install bcrypt
+4. pip install psycopg2
 5. 
 6. 
 7. 

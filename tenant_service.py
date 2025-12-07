@@ -1,6 +1,7 @@
 # tenant_service.py
 from database import MasterSessionLocal
 
+
 def get_db_name_for_company(company_name: str) -> str | None:
     session = MasterSessionLocal()
     row = session.execute(
