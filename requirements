@@ -1,6 +1,6 @@
 When adding any new platform of implementations, Add to this page
-1. 
-2. 
+1. Python language through extension
+2. pip install flask sqlalchemy psycopg2-binary
 3. 
 4. 
 5. 
@@ -8,3 +8,4 @@ When adding any new platform of implementations, Add to this page
 7. 
 8. 
 9. 
+Database code: postgresql://postgres:Jiajun07@@2025@localhost:5432/postgres
