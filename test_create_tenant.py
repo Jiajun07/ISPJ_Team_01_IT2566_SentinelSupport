@@ -4,7 +4,7 @@ if __name__ == "__main__":
     print("Script started")
     try:
         tenant_id, db_name = create_tenant(
-            company_name="Demo SME Pte Ltd",
+            company_name="Demoe SME Pte Ltd",
             admin_email="admin@demosme.com",
             admin_password="StrongPass123!"
         )
