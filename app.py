@@ -1,5 +1,5 @@
 # app.py
-from flask import Flask, g, request
+from flask import Flask, g, Flask, render_template, request, redirect, url_for
 from sqlalchemy.orm import sessionmaker
 from database import get_tenant_engine
 from tenant_service import get_db_name_for_company
@@ -18,6 +18,13 @@ def get_tenant_session():
         g.tenant_session = SessionLocal()
     return g.tenant_session
 
+@app.route("/", methods=["GET", "POST"])
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+
+    return render_template("login.html")
+
 @app.teardown_appcontext
 def remove_session(exception=None):
     sess = g.pop("tenant_session", None)
@@ -30,3 +37,5 @@ def list_documents():
     rows = session.execute("SELECT id, file_path, classification FROM documents").fetchall()
     return {"documents": [dict(r) for r in rows]}
 
+if __name__ == "__main__":
+    app.run(debug=True)

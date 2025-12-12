@@ -7,4 +7,4 @@ When adding any new platform of implementations, Add to this page
 6. 
 7. 
 8. 
-9. 
+py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2

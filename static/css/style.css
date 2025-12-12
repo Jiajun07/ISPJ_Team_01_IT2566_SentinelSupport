@@ -1,0 +1,81 @@
+/* Background */
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background-color: #cfefff; /* light sky blue */
+}
+
+/* Top Banner */
+.top-bar {
+    display: flex;
+    align-items: center;
+    height: 90px;
+    background-color: #6aa9ff; /* blue banner */
+    padding: 0 20px;
+}
+
+.logo-container {
+    margin-right: 15px;
+}
+
+.logo {
+    height: 55px;
+}
+
+/* Title */
+.title {
+    font-size: 28px;
+    font-weight: bold;
+    color: black;
+    margin: 0;
+}
+
+/* Content center */
+.content {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: calc(100vh - 90px);
+}
+
+/* Login Card */
+.login-card {
+    background: white;
+    width: 360px;
+    padding: 35px 40px;
+    border-radius: 10px;
+    box-shadow: 0px 3px 12px rgba(0,0,0,0.15);
+    text-align: center;
+}
+
+.login-card h2 {
+    margin-bottom: 25px;
+    text-align: left;
+    font-size: 20px;
+}
+
+/* Inputs */
+.input-field {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 15px;
+    border: 1px solid #bfbfbf;
+    border-radius: 5px;
+    font-size: 15px;
+}
+
+/* Button */
+.login-btn {
+    width: 100%;
+    padding: 12px;
+    background-color: #2f64ff;
+    border: none;
+    color: white;
+    font-size: 16px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.login-btn:hover {
+    background-color: #1e4ae0;
+}
