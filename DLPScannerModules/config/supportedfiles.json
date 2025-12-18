@@ -1,0 +1,25 @@
+{
+  "text_files": [
+    ".txt",
+    ".csv",
+    ".json"
+  ],
+  "pdf_files": [
+    ".pdf"
+  ],
+  "archive_files": [
+    ".zip"
+  ],
+  "office_files": [
+    ".docx",
+    ".xlsx",
+    ".pptx"
+  ],
+  "image_files": [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".gif"
+  ]
+}

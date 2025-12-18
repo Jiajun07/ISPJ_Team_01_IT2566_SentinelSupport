@@ -7,4 +7,4 @@ When adding any new platform of implementations, Add to this page
 6. pip install flask_wtf
 7. pip install itsdangerous
 8. 
-py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2, flask_wtf, wtforms
+py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2, flask_wtf, wtforms, itsdangerous

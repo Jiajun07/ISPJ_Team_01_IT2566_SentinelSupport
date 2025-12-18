@@ -1,0 +1,122 @@
+{
+  "keywords": {
+    "confidential": {
+      "severity": "High",
+      "description": "Confidential and restricted information",
+      "terms": [
+        "confidential",
+        "secret",
+        "classified",
+        "restricted",
+        "proprietary",
+        "internal use only",
+        "do not distribute",
+        "company confidential",
+        "strictly confidential",
+        "private and confidential",
+        "for internal use",
+        "not for distribution"
+      ]
+    },
+    "financial": {
+      "severity": "Critical",
+      "description": "Financial and monetary information",
+      "terms": [
+        "salary",
+        "wage",
+        "income",
+        "revenue",
+        "profit",
+        "bank account",
+        "routing number",
+        "financial statement",
+        "account number",
+        "balance sheet",
+        "tax return",
+        "iban",
+        "swift code",
+        "wire transfer"
+      ]
+    },
+    "personal": {
+      "severity": "High",
+      "description": "Personal identifiable information",
+      "terms": [
+        "date of birth",
+        "dob",
+        "social security",
+        "medical record",
+        "diagnosis",
+        "prescription",
+        "patient id",
+        "medical history",
+        "blood type",
+        "allergies",
+        "emergency contact",
+        "next of kin"
+      ]
+    },
+    "technical": {
+      "severity": "Critical",
+      "description": "Technical credentials and security information",
+      "terms": [
+        "password",
+        "api key",
+        "secret key",
+        "token",
+        "private key",
+        "certificate",
+        "credentials",
+        "auth token",
+        "bearer token",
+        "access key",
+        "session id",
+        "encryption key",
+        "ssh key",
+        "database password"
+      ]
+    },
+    "legal": {
+      "severity": "Medium",
+      "description": "Legal and compliance related terms",
+      "terms": [
+        "legal notice",
+        "lawsuit",
+        "litigation",
+        "subpoena",
+        "court order",
+        "settlement",
+        "non-disclosure agreement",
+        "nda",
+        "contract",
+        "intellectual property",
+        "copyright",
+        "trademark",
+        "patent"
+      ]
+    },
+    "business": {
+      "severity": "Medium",
+      "description": "Business sensitive information",
+      "terms": [
+        "merger",
+        "acquisition",
+        "strategic plan",
+        "business plan",
+        "market research",
+        "competitive analysis",
+        "customer list",
+        "vendor list",
+        "pricing strategy",
+        "cost structure",
+        "trade secret"
+      ]
+    }
+  },
+  "settings": {
+    "case_sensitive": false,
+    "whole_word_only": true,
+    "minimum_confidence": 0.5,
+    "context_window": 50
+  }
+}
