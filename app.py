@@ -1,13 +1,21 @@
 # app.py
-from flask import Flask, g, Flask, render_template, request, redirect, url_for
+from flask import Flask, g, Flask, render_template, request, redirect, url_for, session, flash, current_app
 from sqlalchemy.orm import sessionmaker
 from database import get_tenant_engine
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm
+from werkzeug.security import generate_password_hash, check_password_hash
+import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired
+
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
+s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 def get_tenant_session():
     if "tenant_session" not in g:
@@ -23,11 +31,6 @@ def get_tenant_session():
 
 @app.route("/", methods=["GET", "POST"])
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-
-    return render_template("login.html")
-
 @app.teardown_appcontext
 def remove_session(exception=None):
     sess = g.pop("tenant_session", None)
@@ -40,7 +43,85 @@ def list_documents():
     rows = session.execute("SELECT id, file_path, classification FROM documents").fetchall()
     return {"documents": [dict(r) for r in rows]}
 
-#TODO login, sign up, html, css, connect email application
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+
+        form = Loginform()
+
+        if request.method == 'POST' and form.validate_on_submit():
+            username_input = escape(form.username.data)
+            password_input = escape(form.password.data)
+            user = True#User.query.filter_by(username=username_input).first()
+
+            if user and check_password_hash(user.password, password_input):
+                if not user.is_verified:
+                    flash("Please verify your email before logging in.", "warning")
+                    return redirect(url_for('login'))
+                session['user_id'] = user.id
+                session['username'] = user.username
+                session['user_type'] = user.user_type
+
+                if user.user_type == 'elderly':
+                    return redirect(url_for('elderly_home'))
+                elif user.user_type == 'volunteer':
+                    return redirect(url_for('volunteer_dashboard'))
+                elif user.user_type == 'admin':
+                    return redirect(url_for('adminDashboard'))
+
+            else:
+                flash("Invalid username or password.", "danger")
+                return redirect(url_for('login'))
+
+        return render_template('login/login_page.html', form=form)
+
+
+
+
+@app.route('/logout')
+def logout():
+   
+        session.clear()
+        flash("You have been logged out.", "info")
+
+        return redirect(url_for('login'))
+
+# @app.route('/signup', methods=['GET', 'POST'])
+# def signup():
+#     username = session.get('username', 'Anonymous')
+#     form = SignUpForm()
+
+#     if request.method == 'POST' and form.validate_on_submit():
+#         existing_user = User.query.filter(
+#             (User.username == form.username.data) | (User.email == form.email.data)
+#         ).first()
+
+#         if existing_user:
+#             flash("Username or email already in use. Please choose another.", "danger")
+#             return render_template('login/signup_page.html', form=form)
+
+#         hashed_password = generate_password_hash(escape(form.password.data))
+
+#         new_user = User(
+#             username=escape(form.username.data),
+#             email=escape(form.email.data),
+#             password=hashed_password,
+#             user_type=escape(form.user_type.data)
+#         )
+#         if new_user.user_type == 'volunteer':
+#             db.session.add(new_user)
+#             db.session.commit()
+#             volunteer_table_join(new_user)# for joining user data to volunteer database if usertype = volunteer
+#         elif new_user.user_type == 'elderly':
+#             db.session.add(new_user)
+#             db.session.commit()
+#             elderly_table_join(new_user)
+#         send_verification_email(new_user.email)
+#         flash(f"Please Verify Your Email!", "success")
+#         return redirect(url_for('login'))
+
+#     return render_template('login/signup_page.html', form=form)
+
+#TODO sign up, html, css, connect email application
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forget_password():
     
@@ -48,7 +129,7 @@ def forget_password():
 
     if form.validate_on_submit():
         email = escape(form.email.data)
-        user = User.query.filter_by(email=email).first()
+        user = True #User.query.filter_by(email=email).first()
 
         if user:
             token = s.dumps(email, salt='password-reset')
@@ -117,10 +198,10 @@ def send_password_reset_email(to_email, reset_url):
 def verify_email(token):
     try:
         email = s.loads(token, salt='email-confirm', max_age=86400)  # 24 hours
-        user = User.query.filter_by(email=email).first()
+        user = True #User.query.filter_by(email=email).first()
         if user:
             user.is_verified = True
-            db.session.commit()
+            #db.session.commit()
             flash("Email verified successfully! You can now log in.", "success")
             return redirect(url_for('login'))
         else:
@@ -135,7 +216,6 @@ def verify_email(token):
 
 @app.route('/reset-password/<token>', methods=['GET', 'POST'])
 def reset_password(token):
-    log_audit_event(f'{session.get("username", "Anonymous")} viewed reset password page')
     try:
         email = s.loads(token, salt='password-reset', max_age=3600)
     except SignatureExpired:
