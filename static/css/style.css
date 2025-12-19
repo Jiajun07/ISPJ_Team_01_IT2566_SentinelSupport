@@ -79,3 +79,160 @@ body {
 .login-btn:hover {
     background-color: #1e4ae0;
 }
+
+/* MyFiles page */
+.content {
+    align-items: flex-start;
+    padding: 40px 20px;
+    min-height: calc(100vh - 90px);
+    box-sizing: border-box;
+}
+
+.file-page {
+    display: flex;
+    gap: 20px;
+    width: 100%;
+    max-width: 1100px;
+}
+
+.card {
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+    padding: 24px;
+    box-sizing: border-box;
+}
+
+.card h2 {
+    margin-top: 0;
+    margin-bottom: 16px;
+    font-size: 20px;
+}
+
+.upload-card {
+    flex: 1 1 45%;
+}
+
+.list-card {
+    flex: 1 1 55%;
+}
+
+.field-label {
+    font-weight: 600;
+    margin-bottom: 6px;
+    display: block;
+}
+
+.file-input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #bfbfbf;
+    border-radius: 6px;
+    font-size: 15px;
+    box-sizing: border-box;
+    background: #f7f9fc;
+}
+
+.drop-zone {
+    margin-top: 12px;
+    border: 2px dashed #6aa9ff;
+    border-radius: 8px;
+    padding: 18px;
+    background: #f5f9ff;
+    text-align: center;
+    color: #2f64ff;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.drop-zone.dragover {
+    background: #e6f0ff;
+    border-color: #2f64ff;
+}
+
+.hint {
+    margin-top: 8px;
+    color: #555;
+    font-size: 13px;
+}
+
+.primary-btn {
+    margin-top: 14px;
+    padding: 12px 16px;
+    background-color: #2f64ff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 15px;
+}
+
+.primary-btn:hover {
+    background-color: #1e4ae0;
+}
+
+.message {
+    margin-top: 10px;
+    font-size: 14px;
+}
+
+.message.error {
+    color: #b00020;
+}
+
+.message.success {
+    color: #0f7b26;
+}
+
+.file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.file-row {
+    background: #f2f6ff;
+    border: 1px solid #d8e3ff;
+    border-radius: 8px;
+    padding: 10px 12px;
+    box-sizing: border-box;
+}
+
+.file-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.file-bar {
+    margin-top: 8px;
+    height: 10px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, #2f64ff 0%, #6aa9ff 100%);
+}
+
+.file-link {
+    color: #2f64ff;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.file-link:hover {
+    text-decoration: underline;
+}
+
+.file-hash {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #444;
+    word-break: break-all;
+}
+
+@media (max-width: 900px) {
+    .file-page {
+        flex-direction: column;
+    }
+}

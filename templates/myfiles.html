@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="file-page">
+    <div class="card upload-card">
+        <h2>Upload a File</h2>
+        <form id="upload-form">
+            <label class="field-label" for="file-input">Choose a file</label>
+            <input
+                type="file"
+                id="file-input"
+                name="file"
+                class="file-input"
+                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt"
+                required
+            >
+            <div id="drop-zone" class="drop-zone">Drag & Drop or Click to select</div>
+            <div class="hint">Allowed: PDF, DOC/DOCX, PNG, JPG/JPEG, TXT</div>
+            <button type="submit" class="primary-btn">Upload</button>
+            <div id="message" class="message"></div>
+        </form>
+    </div>
+
+    <div class="card list-card">
+        <h2>Uploaded Files</h2>
+        <div id="file-list" class="file-list">
+            <div class="hint">No files yet. Upload one to see it here.</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const allowedExtensions = ["pdf", "doc", "docx", "png", "jpg", "jpeg", "txt"];
+    const existingFiles = {{ files | tojson | safe }};
+    const form = document.getElementById("upload-form");
+    const fileInput = document.getElementById("file-input");
+    const dropZone = document.getElementById("drop-zone");
+    const messageEl = document.getElementById("message");
+    const fileList = document.getElementById("file-list");
+
+    const formatSize = (bytes) => {
+        if (bytes === 0) return "0 B";
+        const units = ["B", "KB", "MB", "GB"];
+        const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+        const size = bytes / Math.pow(1024, power);
+        return `${size.toFixed(1)} ${units[power]}`;
+    };
+
+    const showMessage = (text, type) => {
+        messageEl.textContent = text;
+        messageEl.className = `message ${type}`;
+    };
+
+    const addFileRow = (file) => {
+        const row = document.createElement("div");
+        row.className = "file-row";
+
+        const meta = document.createElement("div");
+        meta.className = "file-meta";
+        meta.innerHTML = `<a class=\"file-link\" href=\"${file.url}\" download>${file.name}</a><span>${formatSize(file.size)}</span>`;
+
+        const hashLine = document.createElement("div");
+        hashLine.className = "file-hash";
+        hashLine.textContent = `SHA256: ${file.hash || "n/a"}`;
+
+        const bar = document.createElement("div");
+        bar.className = "file-bar";
+
+        row.appendChild(meta);
+        row.appendChild(hashLine);
+        row.appendChild(bar);
+        fileList.appendChild(row);
+    };
+
+    const handleUpload = async (file) => {
+        const ext = file.name.split(".").pop().toLowerCase();
+        if (!allowedExtensions.includes(ext)) {
+            showMessage("Invalid file type. Please choose a supported format.", "error");
+            fileInput.value = "";
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const response = await fetch("/upload", { method: "POST", body: formData });
+            const data = await response.json();
+
+            if (!response.ok || data.error) {
+                showMessage(data.error || "Upload failed.", "error");
+                return;
+            }
+
+            if (fileList.firstElementChild && fileList.firstElementChild.classList.contains("hint")) {
+                fileList.innerHTML = "";
+            }
+
+            addFileRow(data);
+            showMessage("File uploaded and hashed. Click its name to download.", "success");
+            form.reset();
+        } catch (err) {
+            showMessage("Upload failed. Please try again.", "error");
+        }
+    };
+
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const file = fileInput.files[0];
+        if (!file) {
+            showMessage("Please pick a file to upload.", "error");
+            return;
+        }
+        handleUpload(file);
+    });
+
+    dropZone.addEventListener("click", () => fileInput.click());
+
+    ["dragenter", "dragover"].forEach((eventName) => {
+        dropZone.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropZone.classList.add("dragover");
+        });
+    });
+
+    ["dragleave", "drop"].forEach((eventName) => {
+        dropZone.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropZone.classList.remove("dragover");
+        });
+    });
+
+    dropZone.addEventListener("drop", (event) => {
+        const file = event.dataTransfer.files[0];
+        if (!file) return;
+        handleUpload(file);
+    });
+
+    const renderExistingFiles = () => {
+        if (!existingFiles || !existingFiles.length) return;
+        fileList.innerHTML = "";
+        existingFiles.forEach(addFileRow);
+    };
+
+    renderExistingFiles();
+</script>
+{% endblock %}

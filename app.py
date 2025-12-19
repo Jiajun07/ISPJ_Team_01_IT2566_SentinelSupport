@@ -1,5 +1,8 @@
 # app.py
-from flask import Flask, g, Flask, render_template, request, redirect, url_for
+import os
+import hashlib
+from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify
+from werkzeug.utils import secure_filename
 from sqlalchemy.orm import sessionmaker
 from database import get_tenant_engine
 from tenant_service import get_db_name_for_company
@@ -8,6 +11,38 @@ from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
+
+app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads")
+ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "png", "jpg", "jpeg", "txt"}
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def compute_sha256(path):
+    sha = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
+def get_uploaded_files():
+    files = []
+    for fname in sorted(os.listdir(app.config['UPLOAD_FOLDER'])):
+        fpath = os.path.join(app.config['UPLOAD_FOLDER'], fname)
+        if os.path.isfile(fpath):
+            files.append(
+                {
+                    "name": fname,
+                    "size": os.path.getsize(fpath),
+                    "url": url_for("download_file", filename=fname),
+                    "hash": compute_sha256(fpath),
+                }
+            )
+    return files
 
 def get_tenant_session():
     if "tenant_session" not in g:
@@ -27,6 +62,49 @@ def get_tenant_session():
 def login():
 
     return render_template("login.html")
+
+
+@app.route('/myfiles', methods=['GET'])
+def myfiles():
+    files = get_uploaded_files()
+    return render_template("myfiles.html", files=files)
+
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part in request"}), 400
+
+    file = request.files['file']
+    if not file or file.filename == "":
+        return jsonify({"error": "No file selected"}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file type"}), 400
+
+    filename = secure_filename(file.filename)
+    save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+    # Avoid overwriting existing files by appending a counter
+    if os.path.exists(save_path):
+        name, ext = os.path.splitext(filename)
+        counter = 1
+        while os.path.exists(save_path):
+            filename = f"{name}_{counter}{ext}"
+            save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            counter += 1
+
+    file.save(save_path)
+    size = os.path.getsize(save_path)
+    file_hash = compute_sha256(save_path)
+    file_url = url_for('download_file', filename=filename)
+
+    return jsonify({"name": filename, "size": size, "url": file_url, "hash": file_hash}), 200
+
+
+@app.route('/uploads/<path:filename>', methods=['GET'])
+def download_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
 
 @app.teardown_appcontext
 def remove_session(exception=None):
@@ -160,4 +238,4 @@ def reset_password(token):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)
