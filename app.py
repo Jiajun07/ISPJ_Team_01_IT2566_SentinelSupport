@@ -30,10 +30,6 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("home.html")
 
-"""
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    return render_template("login.html")
 
 def get_tenant_session():
     if "tenant_session" not in g:
@@ -98,41 +94,41 @@ def logout():
 
         return redirect(url_for('login'))
 
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    username = session.get('username', 'Anonymous')
-    form = SignUpForm()
+# @app.route('/signup', methods=['GET', 'POST'])
+# def signup():
+#     username = session.get('username', 'Anonymous')
+#     form = SignUpForm()
 
-    if request.method == 'POST' and form.validate_on_submit():
-        existing_user = User.query.filter(
-            (User.username == form.username.data) | (User.email == form.email.data)
-        ).first()
+#     if request.method == 'POST' and form.validate_on_submit():
+#         existing_user = User.query.filter(
+#             (User.username == form.username.data) | (User.email == form.email.data)
+#         ).first()
 
-        if existing_user:
-            flash("Username or email already in use. Please choose another.", "danger")
-            return render_template('login/signup_page.html', form=form)
+#         if existing_user:
+#             flash("Username or email already in use. Please choose another.", "danger")
+#             return render_template('login/signup_page.html', form=form)
 
-        hashed_password = generate_password_hash(escape(form.password.data))
+#         hashed_password = generate_password_hash(escape(form.password.data))
 
-        new_user = User(
-            username=escape(form.username.data),
-            email=escape(form.email.data),
-            password=hashed_password,
-            user_type=escape(form.user_type.data)
-        )
-        if new_user.user_type == 'volunteer':
-            db.session.add(new_user)
-            db.session.commit()
-            volunteer_table_join(new_user)# for joining user data to volunteer database if usertype = volunteer
-        elif new_user.user_type == 'elderly':
-            db.session.add(new_user)
-            db.session.commit()
-            elderly_table_join(new_user)
-        send_verification_email(new_user.email)
-        flash(f"Please Verify Your Email!", "success")
-        return redirect(url_for('login'))
+#         new_user = User(
+#             username=escape(form.username.data),
+#             email=escape(form.email.data),
+#             password=hashed_password,
+#             user_type=escape(form.user_type.data)
+#         )
+#         if new_user.user_type == 'volunteer':
+#             db.session.add(new_user)
+#             db.session.commit()
+#             volunteer_table_join(new_user)# for joining user data to volunteer database if usertype = volunteer
+#         elif new_user.user_type == 'elderly':
+#             db.session.add(new_user)
+#             db.session.commit()
+#             elderly_table_join(new_user)
+#         send_verification_email(new_user.email)
+#         flash(f"Please Verify Your Email!", "success")
+#         return redirect(url_for('login'))
 
-    return render_template('login/signup_page.html', form=form)
+#     return render_template('login/signup_page.html', form=form)
 
 #TODO sign up, html, css, connect email application
 @app.route('/forgot-password', methods=['GET', 'POST'])
@@ -240,28 +236,27 @@ def reset_password(token):
 
     form = ResetPasswordForm()
 
-"""
 
-def policyEngine(file):
-    try:
-        if not fileProcessor.passedProcessing(file):
-            return {'status': 'error', 'message': 'File type not supported for DLP scanning.'}
+# def policyEngine(file):
+#     try:
+#         if not fileProcessor.passedProcessing(file):
+#             return {'status': 'error', 'message': 'File type not supported for DLP scanning.'}
         
-        extractResult = fileProcessor.readTextFromFile(file)
-        textContent = extractResult
-        dlpMatches = dlpScanner.scan_text(textContent)
-        riskAssessment = dlpScanner.calculateRisk(dlpMatches)
+#         extractResult = fileProcessor.readTextFromFile(file)
+#         textContent = extractResult
+#         dlpMatches = dlpScanner.scan_text(textContent)
+#         riskAssessment = dlpScanner.calculateRisk(dlpMatches)
 
-        scanResult = {
-            'timestamp': datetime.now().isoformat(),
-            'matches': dlpMatches,
-            'riskAssessment': riskAssessment,
-            'textPreview': textContent[:500] + '...' if len(textContent) > 500 else textContent,
-            'fileInformation': fileProcessor.getFileInfo(file)
-        }
-        return {'status': 'success', 'data': scanResult}
-    except Exception as e:
-        return {'status': 'error', 'message': str(e)}
+#         scanResult = {
+#             'timestamp': datetime.now().isoformat(),
+#             'matches': dlpMatches,
+#             'riskAssessment': riskAssessment,
+#             'textPreview': textContent[:500] + '...' if len(textContent) > 500 else textContent,
+#             'fileInformation': fileProcessor.getFileInfo(file)
+#         }
+#         return {'status': 'success', 'data': scanResult}
+#     except Exception as e:
+#         return {'status': 'error', 'message': str(e)}
 
 @app.route('/autodlp', methods=['GET', 'POST'])
 def autodlp():
