@@ -1,0 +1,8 @@
+{
+    "text_files": [".txt", ".csv", ".py", ".js", ".html", ".css", ".json", ".xml", ".sql", ".md", ".log", ".ini", ".cfg"],
+    "pdf_files": [".pdf"],
+    "archive_files": [".zip", ".rar", ".7z"],
+    "office_files": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt"],
+    "image_files": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"],
+    "code_files": [".py", ".js", ".java", ".cpp", ".c", ".cs", ".php", ".rb", ".go", ".rs"]
+}
