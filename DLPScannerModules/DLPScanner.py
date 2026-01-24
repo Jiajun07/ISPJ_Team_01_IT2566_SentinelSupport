@@ -2,6 +2,13 @@ import re, os, json
 from typing import List, Dict, Any
 from dataclasses import dataclass
 
+try:
+    from presidio_analyzer import AnalyzerEngine
+    from presidio_analyzer.nlp_engine import NlpEngineProvider
+    PRESIDIO_AVAILABLE = True
+except ImportError:
+    PRESIDIO_AVAILABLE = False
+    print("Presidio not available - using regex patterns only")
 
 @dataclass
 class DLPMatcher:
@@ -22,6 +29,17 @@ class DLPScanner:
         self.patterns = self.load_patterns()
         self.keywords = self.load_keywords()
         self.settings = self.config.get("settings", {})
+
+        if PRESIDIO_AVAILABLE:
+            configuration = {
+                "nlp_engine_name": "spacy",
+                "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+            }
+            provider = NlpEngineProvider(nlp_configuration=configuration)
+            nlp_engine = provider.create_engine()
+            self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine)
+        else:
+            self.analyzer = None
     
     def load_config(self) -> Dict[str, Any]:
         # Load keywords.json file
@@ -79,10 +97,7 @@ class DLPScanner:
     def load_patterns(self) -> Dict[str, str]:
         return {
             "SID": {'regex': re.compile(r"\b[STFGM]\d{7}[A-Z]\b"), 'validate': self._validate_sid, 'severity': 'High'},
-            "CreditCard": {'regex': re.compile(r"\b(?:\d[ -]*?){13,16}\b"), 'validate': self._validate_credit_card, 'severity': 'Critical'},
             "PhoneNumber": {'regex': re.compile(r"\b\d{3}[-.\s]??\d{3}[-.\s]??\d{4}\b"), 'validate': None, 'severity': 'Medium'},
-            "Email": {'regex': re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"), 'validate': None, 'severity': 'Medium'},
-            "IPAddress": {'regex': re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"), 'validate': self._validate_ip_address, 'severity': 'High'},
         }
     
     def load_keywords(self) -> Dict[str, Dict]:
@@ -103,13 +118,12 @@ class DLPScanner:
         self.settings = self.config.get("settings", {})
     
     def _validate_sid(self, sid: str) -> bool: #example of sid: T0123456A
-        digits = re.sub(r'\D', '', sid)
-        if len(digits) != 9:
+        if len(sid) != 9:
             return False
         
-        startAlphabet = digits[0]
-        numbers = digits[1:8]
-        endAlphabet = sid[-1]
+        startAlphabet = sid[0]
+        numbers = sid[1:8]
+        endAlphabet = sid[8]
 
         if startAlphabet not in "STFGM":
             return False
@@ -121,11 +135,12 @@ class DLPScanner:
         weights = [2, 7, 6, 5, 4, 3, 2]
         total = sum(int(numbers[i]) * weights[i] for i in range(7))
 
+        adjustment = 4 if startAlphabet in "TG" else 0
+        remainder = (total + adjustment) % 11
+
         if startAlphabet in "ST":
-            remainder = total % 11
             checkLetter = "JZIHGFEDCBA"
         else: 
-            remainder = (total + 4) % 11
             checkLetter = "XWUTRQPNMLK" 
 
         return endAlphabet == checkLetter[remainder]
@@ -161,6 +176,52 @@ class DLPScanner:
         startContext = max(0, start - contextWindow)
         endContext = min(len(text), end + contextWindow)
         return text[startContext:endContext]
+    
+    def scan_with_presidio(self, text: str) -> List[DLPMatcher]:
+        print("=== PRESIDIO SCAN START ===")
+        print(f"Analyzer exists: {self.analyzer is not None}")
+        
+        if not self.analyzer:
+            print("Analyzer is None - returning empty list")
+            return []
+        
+        matches = []
+        print(f"Text to scan (first 200 chars): {text[:200]}")
+        print(f"Text length: {len(text)}")
+        
+        entities_to_detect = ["CREDIT_CARD", "EMAIL_ADDRESS", "IP_ADDRESS", "PHONE_NUMBER"]
+        print(f"Entities to detect: {entities_to_detect}")
+        
+        results = self.analyzer.analyze(text=text, entities=entities_to_detect, language='en')
+        print(f"Results count: {len(results)}")
+        print(f"Results: {results}")
+        
+        severity_map = {"CREDIT_CARD": "Critical", "EMAIL_ADDRESS": "Medium", "IP_ADDRESS": "High", "PHONE_NUMBER": "Medium"}
+        for result in results:
+            print(f"Processing result: {result}")
+            if result.score < 0.5:
+                print(f"Skipping - score too low: {result.score}")
+                continue
+            
+            matchedText = text[result.start:result.end]
+            context = self._get_context(text, result.start, result.end)
+
+            matches.append(DLPMatcher(
+                closestDetectedRule=f"presidio_{result.entity_type}",
+                matchedText=matchedText,
+                scanConfidence=result.score,
+                startOfMatch=result.start,
+                endOfMatch=result.end,
+                contextBeforeAfterMatch=context,
+                severity=severity_map.get(result.entity_type, "Medium"),
+                keywordCategory='presidio',
+                keywordDescription=f"Presidio detected entity: {result.entity_type}"
+            )) 
+        
+        print(f"Total matches found: {len(matches)}")
+        print("=== PRESIDIO SCAN END ===")
+
+        return matches
     
     def scan_text(self, text: str) -> List[DLPMatcher]:
         matches = []
@@ -219,6 +280,11 @@ class DLPScanner:
                             keywordCategory='keyword',
                             keywordDescription=categoryInfo.get("description", keyword)
                         ))
+        if PRESIDIO_AVAILABLE:
+            print("yes again")
+            presidio_matches = self.scan_with_presidio(text)
+            matches.extend(presidio_matches)
+            
         return matches
     
     def calculateRisk(self, matches: List[DLPMatcher]) -> Dict[str, Any]:

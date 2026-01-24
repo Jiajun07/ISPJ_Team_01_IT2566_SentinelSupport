@@ -237,26 +237,26 @@ def reset_password(token):
     form = ResetPasswordForm()
 
 
-# def policyEngine(file):
-#     try:
-#         if not fileProcessor.passedProcessing(file):
-#             return {'status': 'error', 'message': 'File type not supported for DLP scanning.'}
+def policyEngine(file):
+    try:
+        if not fileProcessor.passedProcessing(file):
+            return {'status': 'error', 'message': 'File type not supported for DLP scanning.'}
+       
+        extractResult = fileProcessor.readTextFromFile(file)
+        textContent = extractResult
+        dlpMatches = dlpScanner.scan_text(textContent)
+        riskAssessment = dlpScanner.calculateRisk(dlpMatches)
         
-#         extractResult = fileProcessor.readTextFromFile(file)
-#         textContent = extractResult
-#         dlpMatches = dlpScanner.scan_text(textContent)
-#         riskAssessment = dlpScanner.calculateRisk(dlpMatches)
-
-#         scanResult = {
-#             'timestamp': datetime.now().isoformat(),
-#             'matches': dlpMatches,
-#             'riskAssessment': riskAssessment,
-#             'textPreview': textContent[:500] + '...' if len(textContent) > 500 else textContent,
-#             'fileInformation': fileProcessor.getFileInfo(file)
-#         }
-#         return {'status': 'success', 'data': scanResult}
-#     except Exception as e:
-#         return {'status': 'error', 'message': str(e)}
+        scanResult = {
+            'timestamp': datetime.now().isoformat(),
+            'matches': dlpMatches,
+            'riskAssessment': riskAssessment,
+            'textPreview': textContent[:500] + '...' if len(textContent) > 500 else textContent,
+            'fileInformation': fileProcessor.getFileInfo(file)
+        }
+        return {'status': 'success', 'data': scanResult}
+    except Exception as e:
+        return {'status': 'error', 'message': str(e)}
 
 @app.route('/autodlp', methods=['GET', 'POST'])
 def autodlp():
@@ -272,6 +272,12 @@ def autodlp():
         
         result = policyEngine(file)
         if result['status'] == 'success':
+            # DEBUG: Print all matches found
+            print(f"\n=== DLP SCAN DEBUG ===")
+            print(f"Total matches: {len(result['data']['matches'])}")
+            for match in result['data']['matches']:
+                print(f"  - {match.closestDetectedRule}: '{match.matchedText}' (confidence: {match.scanConfidence})")
+            print(f"======================\n")
             return render_template("SuperAdmin/autodlp.html", result=result['data'], filename=file.filename)
         else:
             flash(result['message'], 'error')

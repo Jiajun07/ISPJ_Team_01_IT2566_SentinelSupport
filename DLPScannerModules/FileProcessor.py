@@ -4,6 +4,9 @@ import json
 from io import StringIO
 from typing import List, Dict, Optional, Set
 from werkzeug.datastructures import FileStorage
+from docx import Document
+from pptx import Presentation
+from pandas import read_excel
 
 try:
     import pypdf
@@ -129,6 +132,13 @@ class FileProcessor:
                 return self.readTextFromPDFFile(file)
             elif ext in self.supported_extensions.get("archive_files", set()):
                 return self.readTextFromZipFile(file)
+            elif ext in self.supported_extensions.get("office_files", set()):
+                if ext == '.docx':
+                    return self.readTextFromDocxFile(file)
+                elif ext == '.xlsx':
+                    return self.readTextFromExcelFile(file)
+                elif ext == '.pptx':
+                    return self.readTextFromPPTXFile(file)
             else:
                 raise ValueError(f"Unsupported file type: {ext}")
         except Exception as e:
@@ -143,6 +153,59 @@ class FileProcessor:
                 return content.decode('latin-1', errors='ignore')
         except Exception as e:
             raise ValueError(f"Error reading text file: {e}") from e
+    
+    def readTextFromDocxFile(self, file: FileStorage) -> str:
+        try:
+            from docx import Document
+        except ImportError:
+            raise ImportError("python-docx/Microsoft Word Module is not installed.")
+        
+        try:
+            file.seek(0)
+            document = Document(file)
+            texts = [para.text for para in document.paragraphs]
+            return "\n".join(texts)
+        except Exception as e:
+            raise ValueError(f"Error reading DOCX file '{file.filename}': {str(e)}") from e
+    
+    def readTextFromExcelFile(self, file: FileStorage) -> str:
+        try:
+            import pandas as pd
+        except ImportError:
+            raise ImportError("pandas library/Excel Module not installed.")
+        
+        try:
+            file.seek(0)
+            xls = pd.ExcelFile(file)
+            texts = []
+            for sheet_name in xls.sheet_names:
+                df = pd.read_excel(xls, sheet_name=sheet_name)
+                texts.append(f"--- Sheet: {sheet_name} ---\n")
+                texts.append(df.to_string(index=False))
+                texts.append("\n")
+            return "\n".join(texts)
+        except Exception as e:
+            raise ValueError(f"Error reading Excel file '{file.filename}': {str(e)}") from e
+    
+    def readTextFromPPTXFile(self, file: FileStorage) -> str:
+        try:
+            from pptx import Presentation
+        except ImportError:
+            raise ImportError("python-pptx library/PowerPoint Module is not installed.")
+        
+        try:
+            file.seek(0)
+            presentation = Presentation(file)
+            texts = []
+            for slide_num, slide in enumerate(presentation.slides):
+                slide_texts = []
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        slide_texts.append(shape.text)
+                texts.append(f"--- Slide {slide_num + 1} ---\n" + "\n".join(slide_texts))
+            return "\n\n".join(texts)
+        except Exception as e:
+            raise ValueError(f"Error reading PPTX file '{file.filename}': {str(e)}") from e
     
     def readTextFromPDFFile(self, file: FileStorage) -> str:
         if not PDF_AVAILABLE:

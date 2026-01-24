@@ -6,5 +6,12 @@ When adding any new platform of implementations, Add to this page
 5. pip install wtforms
 6. pip install flask_wtf
 7. pip install itsdangerous
-8. 
+8. pip install python-docx
+9. pip install pypdf
+10. pip install python-pptx
+11. pip install pandas
+12. pip install en-core-web-sm
+13. pip install presidio-anonymizer
+14. pip install spacy
+15. pip install presidio-analyzer
 py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2, flask_wtf, wtforms, itsdangerous
