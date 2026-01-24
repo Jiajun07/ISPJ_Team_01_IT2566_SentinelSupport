@@ -241,12 +241,10 @@ def policyEngine(file):
     try:
         if not fileProcessor.passedProcessing(file):
             return {'status': 'error', 'message': 'File type not supported for DLP scanning.'}
-       
         extractResult = fileProcessor.readTextFromFile(file)
         textContent = extractResult
         dlpMatches = dlpScanner.scan_text(textContent)
         riskAssessment = dlpScanner.calculateRisk(dlpMatches)
-        
         scanResult = {
             'timestamp': datetime.now().isoformat(),
             'matches': dlpMatches,
@@ -264,12 +262,10 @@ def autodlp():
         if 'file' not in request.files:
             flash('No file part', 'error')
             return redirect(request.url)
-        
         file = request.files['file']
         if file.filename == '':
             flash('No selected file', 'error')
             return redirect(request.url)
-        
         result = policyEngine(file)
         if result['status'] == 'success':
             # DEBUG: Print all matches found
@@ -290,7 +286,6 @@ def debug():
     try:
         test_text = "My SSN is 123-45-6789 and my password is secret123"
         matches = dlpScanner.scan_text(test_text)
-        
         return {
             'dlp_scanner_working': True,
             'matches_found': len(matches),

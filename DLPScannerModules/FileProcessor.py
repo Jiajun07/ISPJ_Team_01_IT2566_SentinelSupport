@@ -24,11 +24,9 @@ class FileProcessor:
     def getFileInfo(self,file):
         if not file or not file.filename:
             return None
-        
         file.seek(0, os.SEEK_END)
         fileSize = file.tell()
         file.seek(0)
-
         return {
             "filename": file.filename,
             "size": fileSize,
@@ -45,7 +43,6 @@ class FileProcessor:
                 category: set(extensions)
                 for category, extensions in config.items()
             }
-        
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f"Error loading supported files config: {e}")
             print("Using default supported file extensions.")
@@ -62,11 +59,9 @@ class FileProcessor:
         config_dir = os.path.dirname(self.config_path)
         if not os.path.exists(config_dir):
             os.makedirs(config_dir)
-
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(default_extensions, f, indent=2, ensure_ascii=False)
-
         except Exception as e:
             raise IOError(f"Failed to create default supported files config: {e}")
     
@@ -106,7 +101,6 @@ class FileProcessor:
         if not file or not file.filename:
             return False
         ext = os.path.splitext(file.filename)[1].lower()
-
         if ext in self.supported_extensions.get("text_files", set()):
             return True
         if ext in self.supported_extensions.get("pdf_files", set()) and PDF_AVAILABLE:
@@ -159,7 +153,6 @@ class FileProcessor:
             from docx import Document
         except ImportError:
             raise ImportError("python-docx/Microsoft Word Module is not installed.")
-        
         try:
             file.seek(0)
             document = Document(file)
@@ -173,7 +166,6 @@ class FileProcessor:
             import pandas as pd
         except ImportError:
             raise ImportError("pandas library/Excel Module not installed.")
-        
         try:
             file.seek(0)
             xls = pd.ExcelFile(file)
@@ -222,12 +214,9 @@ class FileProcessor:
                         text.append(f"--- Page {page_num + 1} ---\n{extracted_text}")
                 except Exception as e:
                     text.append(f"--- Page {page_num + 1} (Error reading) ---\nError: {str(e)}")
-            
             if not text:
                 return "No text could be extracted from this PDF."
-                
             return "\n\n".join(text)
-            
         except Exception as e:
             raise ValueError(f"Error reading PDF file '{file.filename}': {str(e)}") from e
     
@@ -238,7 +227,6 @@ class FileProcessor:
                 for file_info in zip_ref.filelist:
                     if file_info.is_dir():
                         continue
-
                     ext = os.path.splitext(file_info.filename)[1].lower()
                     if ext in self.supported_extensions.get("text_files", set()):
                         try:
