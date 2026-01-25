@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <div class="container">
+        <h1>DLP Scanner</h1>
+        <div class="upload-section">
+            <form method="POST" enctype="multipart/form-data">
+                <div class="upload-area">
+                    <input type="file" name="file" id="fileInput" accept=".txt,.csv,.pdf,.docx,.json,.xml,.html,.xlsx,.pptx" required>
+                    <p>Drop files here or click to browse</p>
+                    <small>Supported formats: TXT, CSV, PDF, DOCX, JSON, XML, HTML, XLSX, PPTX</small>
+                </div>
+                <button type="submit" class="btn">Scan for Sensitive Data</button>
+            </form>
+        </div>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-danger">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        {% if result %}
+        <div class="results-section">
+            <h2>DLP Scan Results for "{{ filename }}"</h2>
+            {% if result.riskAssessment %}
+            <div class="risk-summary">
+                <h3>Risk Assessment</h3>
+                <div class="stats">
+                    <div class="stat-card">
+                        <h4>Risk Score</h4>
+                        <span class="risk-badge risk-{{ result.riskAssessment.level.lower() }}">
+                            {{ result.riskAssessment.score }}% - {{ result.riskAssessment.level }}
+                        </span>
+                    </div>
+                    <div class="stat-card">
+                        <h4>Total Matches</h4>
+                        <strong>{{ result.riskAssessment.total_matches }}</strong>
+                    </div>
+                    {% if result.fileInformation and result.fileInformation.size %}
+                    <div class="stat-card">
+                        <h4>File Size</h4>
+                        <strong>{{ "%.1f"|format(result.fileInformation.size / 1024) }} KB</strong>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            {% if result.matches %}
+            <div class="matches-section">
+                <h3>Detected Sensitive Data ({{ result.matches|length }} matches)</h3>
+                {% for match in result.matches %}
+                <div class="match-item">
+                    <strong>Pattern:</strong> {{ match.closestDetectedRule }}<br>
+                    <strong>Matched Text:</strong> <span>{{ match.matchedText }}</span><br>
+                    <strong>Confidence:</strong> {{ "%.0f"|format(match.scanConfidence * 100) }}%<br>
+                    <strong>Severity:</strong> <span class="risk-badge risk-{{ match.severity.lower() }}">{{ match.severity }}</span><br>
+                    <strong>Position:</strong> {{ match.startOfMatch }}-{{ match.endOfMatch }}<br>
+                    <strong>Context:</strong><br>
+                    <div>{{ match.contextBeforeAfterMatch }}</div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div>
+                <h3>No Sensitive Data Detected</h3>
+                <p>The scanned file appears to be clean.</p>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div>
+            <h3>Ready to Scan</h3>
+            <p>Upload a file above to start scanning for sensitive data.</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+
+</html>
