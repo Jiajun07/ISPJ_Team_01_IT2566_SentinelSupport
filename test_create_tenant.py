@@ -1,13 +1,15 @@
+# test_create_tenant.py
+from app import app, db
 from database import create_tenant
 
-if __name__ == "__main__":
+with app.app_context():
     print("Script started")
     try:
-        tenant_id, db_name = create_tenant(
-            company_name="Demoe SME Pte Ltd",
+        tenant_id, schema_name = create_tenant(
+            company_name="Demo SME Pte Ltd",
             admin_email="admin@demosme.com",
             admin_password="StrongPass123!"
         )
-        print("Created tenant:", tenant_id, "DB:", db_name)
+        print("Created tenant:", tenant_id, "Schema:", schema_name)
     except Exception as e:
-        print("Error creating tenant:", repr(e))
+        print("Error:", repr(e))

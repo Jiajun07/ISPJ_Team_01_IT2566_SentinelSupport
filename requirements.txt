@@ -1,6 +1,6 @@
 When adding any new platform of implementations, Add to this page
 1. Python language through extension
-2. pip install flask sqlalchemy psycopg2-binary
+2. pip install flask sqlalchemy psycopg2-binary flask-sqlalchemy
 3. pip install bcrypt
 4. pip install psycopg2
 5. pip install wtforms
@@ -14,4 +14,12 @@ When adding any new platform of implementations, Add to this page
 13. pip install presidio-anonymizer
 14. pip install spacy
 15. pip install presidio-analyzer
+16. pip install SQLAlchemy
 py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2, flask_wtf, wtforms, itsdangerous, python-docx, pypdf, python-pptx, pandas, en-core-web-sm, presidio-anonymizer, spacy, presidio-analyzer
+Flask~=3.1.2
+SQLAlchemy~=2.0.44
+MarkupSafe~=3.0.3
+Werkzeug~=3.1.4
+itsdangerous~=2.2.0
+psycopg2~=2.9.11
+bcrypt~=5.0.0

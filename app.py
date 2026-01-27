@@ -1,7 +1,7 @@
 # app.py
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, current_app
 from sqlalchemy.orm import sessionmaker
-from database import get_tenant_engine
+from database import master_engine, MasterSessionLocal, create_tenant, db
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm
@@ -29,24 +29,75 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("home.html")
 
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = (
+    "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
+    "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
+)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+
+@app.route('/create-tenant', methods=['POST'])
+def register_tenant():
+    data = request.json
+    tenant_id, schema_name = create_tenant(
+        company_name=data['company_name'],
+        admin_email=data['admin_email'],
+        admin_password=data['admin_password']
+    )
+    return {'tenant_id': tenant_id, 'schema_name': schema_name}
+
+if __name__ == '__main__':
+    with app.app_context():
+        # Create public.tenants table (run once)
+        db.create_all()
+    app.run(debug=True)
+
+
+@app.before_request
+def set_tenant_context():
+    """Set tenant schema for this request"""
+    company_name = request.headers.get("X-Company-Name")  # or from session/JWT
+    if not company_name:
+        g.schema_name = None
+        return
+
+    schema_name = get_db_name_for_company(company_name)  # returns 'tenant_1'
+    if not schema_name:
+        g.schema_name = None
+        return
+
+    g.schema_name = schema_name
+
 
 def get_tenant_session():
     if "tenant_session" not in g:
-        # Example: company name stored in session or token
-        company_name = request.headers.get("X-Company-Name")  # or from login/session
-        db_name = get_db_name_for_company(company_name)
-        if not db_name:
-            raise RuntimeError("Unknown or inactive tenant")
-        engine = get_tenant_engine(db_name)
-        SessionLocal = sessionmaker(bind=engine)
-        g.tenant_session = SessionLocal()
+        if not hasattr(g, 'schema_name') or g.schema_name is None:
+            raise RuntimeError("No tenant context set")
+
+        # Create session with search_path set to tenant schema
+        engine = master_engine  # same engine for all tenants
+        session = sessionmaker(bind=engine)()
+
+        # Set search_path for this session to the tenant's schema
+        session.execute(f"SET search_path TO {g.schema_name}, public;")
+        g.tenant_session = session
+
     return g.tenant_session
+
 
 @app.teardown_appcontext
 def remove_session(exception=None):
-    sess = g.pop("tenant_session", None)
-    if sess is not None:
-        sess.close()
+    if hasattr(g, 'tenant_session'):
+        g.tenant_session.close()
+
+@app.route("/users")
+def list_users():
+    session = get_tenant_session()
+    users = session.execute("SELECT * FROM users;").fetchall()  # auto uses tenant_X.users
+    return {"users": [dict(u) for u in users]}
+
 
 @app.route("/documents")
 def list_documents():

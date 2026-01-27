@@ -1,117 +1,79 @@
 # database.py
+from flask_alchemy import SQLAlchemy
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import Engine
 import psycopg2
 import bcrypt
 MASTER_DB_URL = (
-    "postgresql://postgres:Jiajun07@@2025@localhost:5432/sdsm_master"
+    "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
+    "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
 )
+# database.py
+db = SQLAlchemy()
 
-MASTER_DSN = "dbname=sdsm_master user=postgres password=Jiajun07@@2025 host=localhost port=5432"
-SUPER_DSN  = "dbname=postgres    user=postgres password=Jiajun07@@2025 host=localhost port=5432"
-
+class Tenant(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    company_name = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(20), default='active')
+    created_at = db.Column(db.DateTime, default=db.func.now())
 
 def create_tenant(company_name: str, admin_email: str, admin_password: str):
-    # 1) insert tenant row and get id + db_name
-    with psycopg2.connect(MASTER_DSN) as master_conn:
-        with master_conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO tenants (company_name, status)
-                VALUES (%s, 'active')
-                RETURNING id;
-                """,
-                (company_name,),
-            )
-            tenant_id = cur.fetchone()[0]
-            db_name = f"tenant_{tenant_id}"
+    # 1) Create tenant record
+    tenant = Tenant(company_name=company_name)
+    db.session.add(tenant)
+    db.session.flush()  # get id without committing yet
+    tenant_id = tenant.id
+    schema_name = f"tenant_{tenant_id}"
 
-            cur.execute(
-                """
-                UPDATE tenants
-                SET db_name = %s
-                WHERE id = %s;
-                """,
-                (db_name, tenant_id),
-            )
-        # master_conn is committed automatically when the with-block exits
+    # 2) CREATE SCHEMA
+    db.session.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name};"))
 
-    # 2) CREATE DATABASE – separate autocommit connection
-    super_conn = psycopg2.connect(SUPER_DSN)
-    super_conn.autocommit = True          # critical line
-    try:
-        with super_conn.cursor() as cur:
-            cur.execute(f'CREATE DATABASE "{db_name}";')
-    finally:
-        super_conn.close()
+    # 3) CREATE TABLES IN SCHEMA
+    db.session.execute(text(f"""
+        CREATE TABLE IF NOT EXISTS {schema_name}.users (
+            id            SERIAL PRIMARY KEY,
+            email         VARCHAR(255) UNIQUE NOT NULL,
+            password_hash VARCHAR(255)        NOT NULL,
+            role          VARCHAR(50)         NOT NULL,
+            created_at    TIMESTAMP           NOT NULL DEFAULT NOW()
+        );
+    """))
 
-    # 3) connect to tenant DB and create tables + admin
-    tenant_dsn = (
-        f"dbname={db_name} user=postgres "
-        f"password=Jiajun07@@2025 host=localhost port=5432"
+    db.session.execute(text(f"""
+        CREATE TABLE IF NOT EXISTS {schema_name}.documents (
+            id              SERIAL PRIMARY KEY,
+            owner_user_id   INT          NOT NULL REFERENCES {schema_name}.users(id),
+            file_path       TEXT         NOT NULL,
+            classification  VARCHAR(50)  NOT NULL,
+            version         INT          NOT NULL DEFAULT 1,
+            created_at      TIMESTAMP    NOT NULL DEFAULT NOW()
+        );
+    """))
+
+    # 4) Insert admin user
+    password_hash = bcrypt.hashpw(
+        admin_password.encode("utf-8"),
+        bcrypt.gensalt()
+    ).decode("utf-8")
+
+    db.session.execute(
+        text(f"INSERT INTO {schema_name}.users (email, password_hash, role) VALUES (%s, %s, 'admin');"),
+        (admin_email, password_hash)
     )
-    with psycopg2.connect(tenant_dsn) as tenant_conn:
-        with tenant_conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    id            SERIAL PRIMARY KEY,
-                    email         VARCHAR(255) UNIQUE NOT NULL,
-                    password_hash VARCHAR(255)        NOT NULL,
-                    role          VARCHAR(50)         NOT NULL,
-                    created_at    TIMESTAMP           NOT NULL DEFAULT NOW()
-                );
-                """
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS documents (
-                    id              SERIAL PRIMARY KEY,
-                    owner_user_id   INT          NOT NULL REFERENCES users(id),
-                    file_path       TEXT         NOT NULL,
-                    classification  VARCHAR(50)  NOT NULL,
-                    version         INT          NOT NULL DEFAULT 1,
-                    created_at      TIMESTAMP    NOT NULL DEFAULT NOW()
-                );
-                """
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS audit_logs (
-                    id           SERIAL PRIMARY KEY,
-                    user_id      INT REFERENCES users(id),
-                    action       VARCHAR(100) NOT NULL,
-                    target_type  VARCHAR(50),
-                    target_id    INT,
-                    details      TEXT,
-                    created_at   TIMESTAMP    NOT NULL DEFAULT NOW()
-                );
-                """
-            )
 
-            password_hash = bcrypt.hashpw(
-                admin_password.encode("utf-8"),
-                bcrypt.gensalt(),
-            ).decode("utf-8")
-
-            cur.execute(
-                """
-                INSERT INTO users (email, password_hash, role)
-                VALUES (%s, %s, 'admin');
-                """,
-                (admin_email, password_hash),
-            )
-
-    return tenant_id, db_name
+    db.session.commit()
+    return tenant_id, schema_name
 
 
 
 
 master_engine = create_engine(MASTER_DB_URL)
 MasterSessionLocal = sessionmaker(bind=master_engine)
-
-def get_tenant_engine(db_name: str) -> Engine:
-    return create_engine(
-        f"postgresql://postgres:Jiajun07@@2025@localhost:5432/{db_name}"
-    )
+def get_tenant_users(tenant_id: str):
+    with psycopg2.connect(MASTER_DB_URL) as conn:
+        with conn.cursor() as cur:
+            schema_name = f"tenant_{tenant_id}"
+            cur.execute(f"SET search_path TO {schema_name}, public;")
+            cur.execute("SELECT * FROM users;")
+            return cur.fetchall()
