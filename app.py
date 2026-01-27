@@ -1,5 +1,6 @@
 # app.py
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, current_app
+from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
 from database import create_tenant, db, get_tenant_engine
 from tenant_service import get_db_name_for_company
@@ -19,6 +20,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
+csrf = CSRFProtect(app)
+
 configPath = os.path.join(app.root_path, "config", "keywords.json")
 fileConfigPath = os.path.join(app.root_path, "config", "supportedfiles.json")
 
@@ -29,7 +32,6 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("home.html")
 
-app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
     "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"

@@ -14,4 +14,6 @@ When adding any new platform of implementations, Add to this page
 13. pip install presidio-anonymizer
 14. pip install spacy
 15. pip install presidio-analyzer
+16. pip install flask_sqlalchemy
+
 py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2, flask_wtf, wtforms, itsdangerous, python-docx, pypdf, python-pptx, pandas, en-core-web-sm, presidio-anonymizer, spacy, presidio-analyzer
