@@ -30,7 +30,8 @@ fileProcessor = FileProcessor(fileConfigPath)
 
 @app.route("/", methods=["GET", "POST"])
 def home():
-    return render_template("home.html")
+    return render_template("front_page.html")
+
 
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"

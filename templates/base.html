@@ -8,17 +8,15 @@
 </head>
 <body>
 
-    <!-- Top Navbar -->
-    <header class="top-bar">
-        <a class="homeclick" href="{{ url_for('home') }}">
-            <div class="logo-container">
-                <img src="{{ url_for('static', filename='img/logo.png') }}" class="logo" alt="Logo">
-            </div>
-            <h1 class="title">SentinelSupport</h1>
-        </a>
-    </header>
+<header class="top-bar">
+    <a class="homeclick" href="{{ url_for('home') }}">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" class="logo" alt="Logo">
+        </div>
+        <h1 class="title">SentinelSupport</h1>
+    </a>
+</header>
 
-    <!-- Main content -->
     <div class="content">
         {% block content %}{% endblock %}
     </div>
