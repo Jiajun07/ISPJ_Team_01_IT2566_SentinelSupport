@@ -84,7 +84,37 @@ def create_tenant(company_name: str, admin_email: str, admin_password: str):
     return tenant_id, schema_name
 
 
+def get_all_tenants():
+    """Get all active tenants for admin dashboard"""
+    return db.session.execute(
+        text("SELECT * FROM tenants WHERE status = 'active' ORDER BY created_at DESC")
+    ).fetchall()
 
+
+def archive_tenant(tenant_id: int):
+    """Archive tenant on subscription end"""
+    tenant = db.session.execute(
+        text("UPDATE tenants SET status = 'archived' WHERE id = :tid RETURNING *"),
+        {"tid": tenant_id}
+    ).fetchone()
+    db.session.commit()
+    return tenant
+
+
+def get_tenant_stats(tenant_id: int):
+    """Get stats for admin dashboard"""
+    schema = f"tenant_{tenant_id}"
+    session = MasterSessionLocal()
+    session.execute(text(f"SET search_path TO {schema}, public"))
+
+    stats = {
+        'users': session.execute("SELECT COUNT(*) FROM users").scalar(),
+        'documents': session.execute("SELECT COUNT(*) FROM documents").scalar(),
+        'audit_logs': session.execute("SELECT COUNT(*) FROM audit_logs").scalar(),
+        'db_size': session.execute("SELECT pg_size_pretty(pg_database_size(current_database()))").scalar()
+    }
+    session.close()
+    return stats
 
 
 master_engine = create_engine(MASTER_DB_URL)
