@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+
+<script>
+    document.body.classList.add("myfiles-body");
+</script>
+
+<div class="myfiles-shell">
+    <aside class="side-rail">
+        <button type="button" class="upload-btn" onclick="window.location.href='/myfiles'">Upload File</button>
+
+        <nav class="rail-nav">
+            <button class="rail-link active" type="button" onclick="window.location.href='/myfiles'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                </svg>
+                My files
+            </button>
+            <button class="rail-link" type="button">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
+                </svg>
+                Shared with me
+            </button>
+            <button class="rail-link" type="button">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                Recent
+            </button>
+            <button class="rail-link" type="button">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                </svg>
+                Bin
+            </button>
+        </nav>
+    </aside>
+
+    <section class="main-stage">
+        <div class="workspace">
+            <div class="file-detail-container">
+                <div class="detail-header">
+                    <button class="back-btn" onclick="window.location.href='/myfiles'">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M19 12H5M12 19l-7-7 7-7"/>
+                        </svg>
+                        Back to My Files
+                    </button>
+                </div>
+
+                <div class="detail-content">
+                    <div class="file-preview-card">
+                        <div class="file-icon-large">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                                <polyline points="14 2 14 8 20 8"/>
+                            </svg>
+                        </div>
+                        <div class="file-metadata">
+                            <div class="meta-row">
+                                <span class="meta-label">Name of file:</span>
+                                <span class="meta-value">{{ file.name }}</span>
+                            </div>
+                            <div class="meta-row">
+                                <span class="meta-label">Uploaded by:</span>
+                                <span class="meta-value">{{ file.uploaded_by }}</span>
+                            </div>
+                            <div class="meta-row">
+                                <span class="meta-label">Owner:</span>
+                                <span class="meta-value">{{ file.owner }}</span>
+                            </div>
+                            <div class="meta-row">
+                                <span class="meta-label">Date Uploaded:</span>
+                                <span class="meta-value">{{ file.modified }}</span>
+                            </div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="action-btn secondary-btn">Upload new version</button>
+                            <a href="{{ file.url }}" download class="action-btn primary-btn">Download File</a>
+                        </div>
+                    </div>
+
+                    <div class="history-section">
+                        <h3 class="history-title">History:</h3>
+                        <div class="history-table">
+                            <div class="history-head">
+                                <div class="hist-col">Name</div>
+                                <div class="hist-col">Uploaded by</div>
+                                <div class="hist-col">Date Uploaded</div>
+                                <div class="hist-col">Download</div>
+                            </div>
+                            <div class="history-body">
+                                <div class="history-row">
+                                    <div class="hist-col">v1.docx</div>
+                                    <div class="hist-col">{{ file.uploaded_by }}</div>
+                                    <div class="hist-col">{{ file.modified }}</div>
+                                    <div class="hist-col">
+                                        <button class="hist-action-btn">...</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+{% endblock %}

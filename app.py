@@ -18,10 +18,23 @@ from datetime import datetime
 
 import os
 import smtplib
+import re
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+def sanitize_filename(filename):
+    """Sanitize filename while preserving spaces and common characters."""
+    # Remove any path components
+    filename = os.path.basename(filename)
+    # Remove potentially dangerous characters but keep spaces, dots, hyphens, underscores, parentheses
+    filename = re.sub(r'[^\w\s.()-]', '', filename)
+    # Remove any leading/trailing whitespace or dots
+    filename = filename.strip('. ')
+    # Collapse multiple spaces into one
+    filename = re.sub(r'\s+', ' ', filename)
+    return filename if filename else 'unnamed'
 
 configPath = os.path.join(app.root_path, "config", "keywords.json")
 fileConfigPath = os.path.join(app.root_path, "config", "supportedfiles.json")
@@ -35,8 +48,10 @@ def home():
 
 
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads")
+app.config['PENDING_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads_pending")
 ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "png", "jpg", "jpeg", "txt"}
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(app.config['PENDING_FOLDER'], exist_ok=True)
 
 
 def allowed_file(filename):
@@ -80,16 +95,186 @@ def get_tenant_session():
 
 @app.route("/", methods=["GET", "POST"])
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-
-    return render_template("login.html")
-
+#@app.route("/login", methods=["GET", "POST"])
+#def login():
+#
+#    return render_template("login.html")
+#
 
 @app.route('/myfiles', methods=['GET'])
 def myfiles():
     files = get_uploaded_files()
     return render_template("myfiles.html", files=files)
+
+
+def _pending_path(temp_id):
+    for fname in os.listdir(app.config['PENDING_FOLDER']):
+        if fname.startswith(f"{temp_id}__"):
+            return os.path.join(app.config['PENDING_FOLDER'], fname)
+    return None
+
+
+@app.route('/file/<path:filename>', methods=['GET'])
+def file_detail(filename):
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    
+    if not os.path.exists(file_path):
+        return "File not found", 404
+    
+    file_info = {
+        "name": filename,
+        "size": os.path.getsize(file_path),
+        "url": url_for("download_file", filename=filename),
+        "hash": compute_sha256(file_path),
+        "modified": datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%d %B %Y'),
+        "owner": "You",
+        "uploaded_by": "You"
+    }
+    
+    return render_template("file_detail.html", file=file_info)
+
+
+@app.route('/upload/temp', methods=['POST'])
+def upload_temp():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part in request"}), 400
+
+    file = request.files['file']
+    if not file or file.filename == "":
+        return jsonify({"error": "No file selected"}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file type"}), 400
+
+    from uuid import uuid4
+    temp_id = str(uuid4())
+    safe_name = sanitize_filename(file.filename)
+    pending_name = f"{temp_id}__{safe_name}"
+    pending_path = os.path.join(app.config['PENDING_FOLDER'], pending_name)
+
+    file.save(pending_path)
+    size = os.path.getsize(pending_path)
+    file_hash = compute_sha256(pending_path)
+
+    return jsonify({
+        "confirm_url": url_for('confirm_upload', temp_id=temp_id),
+        "name": safe_name,
+        "size": size,
+        "hash": file_hash
+    }), 200
+
+
+@app.route('/upload/confirm/<temp_id>', methods=['GET', 'POST'])
+def confirm_upload(temp_id):
+    pending_path = _pending_path(temp_id)
+    if not pending_path or not os.path.exists(pending_path):
+        return "Pending file not found", 404
+
+    pending_file = os.path.basename(pending_path)
+    original_name = pending_file.split("__", 1)[1]
+    size = os.path.getsize(pending_path)
+    file_hash = compute_sha256(pending_path)
+    modified = datetime.fromtimestamp(os.path.getmtime(pending_path)).strftime('%d %B %Y')
+
+    if request.method == 'POST':
+        target_name = request.form.get('name') or original_name
+        target_safe = sanitize_filename(target_name)
+        save_path = os.path.join(app.config['UPLOAD_FOLDER'], target_safe)
+
+        if os.path.exists(save_path):
+            name, ext = os.path.splitext(target_safe)
+            counter = 1
+            while os.path.exists(save_path):
+                target_safe = f"{name}_{counter}{ext}"
+                save_path = os.path.join(app.config['UPLOAD_FOLDER'], target_safe)
+                counter += 1
+
+        os.replace(pending_path, save_path)
+        size_final = os.path.getsize(save_path)
+        file_hash_final = compute_sha256(save_path)
+        file_url = url_for('download_file', filename=target_safe)
+        return redirect(url_for('file_detail', filename=target_safe))
+
+    return render_template(
+        "confirm_upload.html",
+        file={
+            "temp_id": temp_id,
+            "name": original_name,
+            "size": size,
+            "hash": file_hash,
+            "modified": modified,
+            "owner": "You",
+            "uploaded_by": "You"
+        }
+    )
+
+
+@app.route('/rename', methods=['POST'])
+def rename_file():
+    data = request.get_json()
+    old_name = data.get('old_name')
+    new_name = data.get('new_name')
+
+    if not old_name or not new_name:
+        return jsonify({"error": "Missing filename"}), 400
+
+    old_path = os.path.join(app.config['UPLOAD_FOLDER'], sanitize_filename(old_name))
+    new_path = os.path.join(app.config['UPLOAD_FOLDER'], sanitize_filename(new_name))
+
+    if not os.path.exists(old_path):
+        return jsonify({"error": "File not found"}), 404
+
+    if os.path.exists(new_path):
+        return jsonify({"error": "File with that name already exists"}), 409
+
+    try:
+        os.rename(old_path, new_path)
+        return jsonify({"message": "File renamed successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/share', methods=['POST'])
+def share_file():
+    data = request.get_json()
+    filename = data.get('filename')
+    email = data.get('email')
+
+    if not filename or not email:
+        return jsonify({"error": "Missing filename or email"}), 400
+
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], sanitize_filename(filename))
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found"}), 404
+
+    try:
+        # TODO: Implement email sharing logic
+        # For now, just return success message
+        return jsonify({"message": f"File {filename} shared with {email}"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/delete', methods=['POST'])
+def delete_file():
+    data = request.get_json()
+    filename = data.get('filename')
+
+    if not filename:
+        return jsonify({"error": "Missing filename"}), 400
+
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], sanitize_filename(filename))
+
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found"}), 404
+
+    try:
+        os.remove(file_path)
+        return jsonify({"message": "File deleted successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/upload', methods=['POST'])
@@ -104,7 +289,7 @@ def upload_file():
     if not allowed_file(file.filename):
         return jsonify({"error": "Invalid file type"}), 400
 
-    filename = secure_filename(file.filename)
+    filename = sanitize_filename(file.filename)
     save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
 
     # Avoid overwriting existing files by appending a counter
@@ -126,6 +311,8 @@ def upload_file():
 
 @app.route('/uploads/<path:filename>', methods=['GET'])
 def download_file(filename):
+    from urllib.parse import unquote
+    filename = unquote(filename)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
 
 @app.teardown_appcontext
