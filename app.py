@@ -29,6 +29,9 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("home.html")
 
+from flask import Flask
+from database import db, create_tenant
+
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
@@ -38,6 +41,18 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 
+# Create public.tenants table (run once)
+with app.app_context():
+    db.create_all()  # creates Tenant model table
+
+
+@app.route('/test-tenant', methods=['GET'])
+def test_tenant():
+    with app.app_context():
+        tenant_id, schema_name = create_tenant(
+            "Test Company", "admin@test.com", "pass123"
+        )
+        return f"Created tenant {tenant_id} with schema {schema_name}"
 @app.route('/create-tenant', methods=['POST'])
 def register_tenant():
     data = request.json

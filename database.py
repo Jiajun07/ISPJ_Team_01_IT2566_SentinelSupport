@@ -1,15 +1,25 @@
 # database.py
-from flask_alchemy import SQLAlchemy
+from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import Engine
+from sqlalchemy import text
 import psycopg2
 import bcrypt
 MASTER_DB_URL = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
     "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
 )
+
+
+db = SQLAlchemy()
+
+
 # database.py
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
+import bcrypt
+
 db = SQLAlchemy()
 
 class Tenant(db.Model):
@@ -22,7 +32,7 @@ def create_tenant(company_name: str, admin_email: str, admin_password: str):
     # 1) Create tenant record
     tenant = Tenant(company_name=company_name)
     db.session.add(tenant)
-    db.session.flush()  # get id without committing yet
+    db.session.flush()
     tenant_id = tenant.id
     schema_name = f"tenant_{tenant_id}"
 
@@ -51,12 +61,23 @@ def create_tenant(company_name: str, admin_email: str, admin_password: str):
         );
     """))
 
+    db.session.execute(text(f"""
+        CREATE TABLE IF NOT EXISTS {schema_name}.audit_logs (
+            id           SERIAL PRIMARY KEY,
+            user_id      INT REFERENCES {schema_name}.users(id),
+            action       VARCHAR(100) NOT NULL,
+            target_type  VARCHAR(50),
+            target_id    INT,
+            details      TEXT,
+            created_at   TIMESTAMP    NOT NULL DEFAULT NOW()
+        );
+    """))
+
     # 4) Insert admin user
     password_hash = bcrypt.hashpw(
         admin_password.encode("utf-8"),
         bcrypt.gensalt()
     ).decode("utf-8")
-
     db.session.execute(
         text(f"INSERT INTO {schema_name}.users (email, password_hash, role) VALUES (%s, %s, 'admin');"),
         (admin_email, password_hash)
@@ -64,9 +85,6 @@ def create_tenant(company_name: str, admin_email: str, admin_password: str):
 
     db.session.commit()
     return tenant_id, schema_name
-
-
-
 
 master_engine = create_engine(MASTER_DB_URL)
 MasterSessionLocal = sessionmaker(bind=master_engine)
