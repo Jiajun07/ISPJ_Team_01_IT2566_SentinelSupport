@@ -79,3 +79,9 @@ body {
 .login-btn:hover {
     background-color: #1e4ae0;
 }
+
+.homeclick {
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+}

@@ -28,11 +28,11 @@ def password_complexity_check(form, field):
 
 
 class Loginform(FlaskForm):
-    username = StringField('username', validators=[DataRequired(), Length(max=64)])
-    password = PasswordField('password', validators=[DataRequired(), Length(max=64)])
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    password = PasswordField('Password', validators=[DataRequired(), Length(max=64)])
     submit = SubmitField('Login')
 
-
+#cleanup usernames
 class SignUpForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired(), Length(max=64)])
     email = StringField('Email', validators=[DataRequired(), Email()])
