@@ -51,6 +51,7 @@
         margin-bottom: 20px;
         font-weight: bold;
         color: #333;
+        text-align: left;
     }
 
     .form-group {
@@ -64,6 +65,7 @@
         border-radius: 6px;
         border: 1px solid #ccc;
         font-size: 1rem;
+        box-sizing: border-box;
     }
 
     .form-control:focus {
@@ -102,65 +104,28 @@
     .login-button:hover {
         background-color: #3B5BDB;
     }
-
-    /* Flash Messages */
-    .flash-message {
-        padding: 10px;
-        margin-bottom: 15px;
-        border-radius: 5px;
-        font-size: 0.9rem;
-    }
-
-    .flash-message.success {
-        background-color: #d4edda;
-        color: #155724;
-    }
-
-    .flash-message.failure {
-        background-color: #f8d7da;
-        color: #721c24;
-    }
 </style>
 
-<!-- Header -->
-<div class="top-header">
-    <!-- Optional logo -->
-    <!-- <img src="{{ url_for('static', filename='shield.png') }}" alt="Logo"> -->
-    SentinelSupport
-</div>
 
-<!-- Login Page -->
-<div class="login-page">
-    <div class="login-card">
-        <h3>Login</h3>
+<div class="login-card">
+    <h3>Login</h3>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            {% for category, message in messages %}
-                <div class="flash-message {{ category }}">
-                    {{ message }}
-                </div>
-            {% endfor %}
-        {% endif %}
-        {% endwith %}
+    <form method="POST">
+        {{ form.hidden_tag() }}
 
-        <form method="POST">
-            {{ form.hidden_tag() }}
+        <div class="form-group">
+            {{ form.email(class="form-control", placeholder="Email") }}
+        </div>
 
-            <div class="form-group">
-                {{ form.username(class="form-control", placeholder="Email") }}
+        <div class="form-group">
+            {{ form.password(class="form-control", placeholder="Password") }}
+            <div class="forgot-password">
+                <a href="/forgot-password">Forgot Password?</a>
             </div>
+        </div>
 
-            <div class="form-group">
-                {{ form.password(class="form-control", placeholder="Password") }}
-                <div class="forgot-password">
-                    <a href="/forgot-password">Forgot Password?</a>
-                </div>
-            </div>
-
-            {{ form.submit(class="login-button") }}
-        </form>
-    </div>
+        {{ form.submit(class="login-button") }}
+    </form>
 </div>
 
 {% endblock %}

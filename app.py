@@ -4,7 +4,7 @@ import hashlib
 from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify
 from werkzeug.utils import secure_filename
 from sqlalchemy.orm import sessionmaker
-from database import get_tenant_engine
+from database import create_tenant, db, get_tenant_engine
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm
@@ -15,7 +15,6 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired
 from DLPScannerModules.DLPScanner import DLPScanner
 from DLPScannerModules.FileProcessor import FileProcessor
 from datetime import datetime
-
 import os
 import smtplib
 import re
@@ -46,6 +45,26 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("home.html")
 
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = (
+    "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
+    "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
+)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+
+# Create public.tenants table (run once)
+with app.app_context():
+    db.create_all()  # creates Tenant model table
+
+@app.route('/test-tenant', methods=['GET'])
+def test_tenant():
+    with app.app_context():
+        tenant_id, schema_name = create_tenant(
+            "Test Company", "admin@test.com", "pass123"
+        )
+        return f"Created tenant {tenant_id} with schema {schema_name}"
 
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads")
 app.config['PENDING_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads_pending")
