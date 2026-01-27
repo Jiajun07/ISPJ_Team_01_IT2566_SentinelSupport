@@ -12,7 +12,6 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired
 from DLPScannerModules.DLPScanner import DLPScanner
 from DLPScannerModules.FileProcessor import FileProcessor
 from datetime import datetime
-
 import os
 import smtplib
 
