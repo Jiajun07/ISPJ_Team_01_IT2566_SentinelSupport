@@ -1,4 +1,5 @@
 import pytesseract
+from pytesseract import Output
 from PIL import Image
 import cv2
 import os
@@ -6,7 +7,7 @@ import os
 """
 Page segmentation modes: 
 0 Orientation and script detection (OSD) only
-1 Automatic page segmentation with OSD. ‘
+1 Automatic page segmentation with OSD.
 2 Automatic page segmentation, but no OSD, or OCR.
 3 Fully automatic page segmentation, but no OSD. (Default)
 4 Assume a single column of text of variable sizes.
@@ -29,7 +30,9 @@ OCR Engine Mode
 3    Default, based on what is available.
 """
 
-myconfig = r"--psm 6 --oem 3"
+def performOCRandScan(image_path: str) -> str:
 
-text = pytesseract.image_to_string(Image.open(r"C:\Users\techn\Downloads\test files for ISPJ\ocrjpgtext.jpg"), config=myconfig)
-print(text)
+    myconfig = r"--psm 6 --oem 3"
+    img = Image.open(image_path)
+
+    return pytesseract.image_to_string(img, config=myconfig)    

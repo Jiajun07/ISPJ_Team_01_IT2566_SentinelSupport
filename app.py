@@ -20,7 +20,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
-csrf = CSRFProtect(app)
+#csrf = CSRFProtect(app)
 
 configPath = os.path.join(app.root_path, "config", "keywords.json")
 fileConfigPath = os.path.join(app.root_path, "config", "supportedfiles.json")
@@ -275,23 +275,24 @@ def policyEngine(file):
     try:
         if not fileProcessor.passedProcessing(file):
             return {'status': 'error', 'message': 'File type not supported for DLP scanning.'}
-        extractResult = fileProcessor.readTextFromFile(file)
-        textContent = extractResult
-        dlpMatches = dlpScanner.scan_text(textContent)
-        riskAssessment = dlpScanner.calculateRisk(dlpMatches)
-        scanResult = {
-            'timestamp': datetime.now().isoformat(),
-            'matches': dlpMatches,
-            'riskAssessment': riskAssessment,
-            'textPreview': textContent[:500] + '...' if len(textContent) > 500 else textContent,
-            'fileInformation': fileProcessor.getFileInfo(file)
-        }
-        return {'status': 'success', 'data': scanResult}
+        ext = fileProcessor.getFileExtension(file.filename)
+        if ext in fileProcessor.supported_extensions.get("image_files", set()):
+            extractResult = fileProcessor.readTextFromFile(file)
+            decision_result = dlpScanner.scan_ocr_and_decide(extractResult)
+        else:
+            extractResult = fileProcessor.readTextFromFile(file)
+            decision_result = dlpScanner.scan_and_decide(extractResult)
+        return {'status': 'success',
+                'decision': decision_result['decision'],
+                'reasons': decision_result['reasons'],
+                'fileName': fileProcessor.getFileInfo(file)
+            }
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
 
 @app.route('/autodlp', methods=['GET', 'POST'])
 def autodlp():
+    result = None 
     if request.method == 'POST':      
         if 'file' not in request.files:
             flash('No file part', 'error')
@@ -300,19 +301,22 @@ def autodlp():
         if file.filename == '':
             flash('No selected file', 'error')
             return redirect(request.url)
+        
         result = policyEngine(file)
-        if result['status'] == 'success':
-            # DEBUG: Print all matches found
-            print(f"\n=== DLP SCAN DEBUG ===")
-            print(f"Total matches: {len(result['data']['matches'])}")
-            for match in result['data']['matches']:
-                print(f"  - {match.closestDetectedRule}: '{match.matchedText}' (confidence: {match.scanConfidence})")
-            print(f"======================\n")
-            return render_template("SuperAdmin/autodlp.html", result=result['data'], filename=file.filename)
-        else:
+        if 'status' in result and result['status'] == 'error':
             flash(result['message'], 'error')
             return redirect(request.url)
-    return render_template("SuperAdmin/autodlp.html")
+        else:
+            decision = result.get('decision')
+            reasons = result.get('reasons', [])
+            if decision == 'deny':
+                flash(f'File DENIED - {"; ".join(reasons)}', 'error') 
+            else:
+                flash(f'File ALLOWED - {"; ".join(reasons)}', 'success')   
+    return render_template("SuperAdmin/autodlp.html",
+                            decision=result.get('decision') if result else None,
+                            reasons=result.get('reasons') if result else None,
+                            filename=file.filename if 'file' in locals() and file.filename else None)
 
 
 @app.route('/debug')
