@@ -285,7 +285,8 @@ def policyEngine(file):
         return {'status': 'success',
                 'decision': decision_result['decision'],
                 'reasons': decision_result['reasons'],
-                'fileName': fileProcessor.getFileInfo(file)
+                'fileName': fileProcessor.getFileInfo(file),
+                'riskLevel': decision_result.get('riskLevel')
             }
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
@@ -316,7 +317,8 @@ def autodlp():
     return render_template("SuperAdmin/autodlp.html",
                             decision=result.get('decision') if result else None,
                             reasons=result.get('reasons') if result else None,
-                            filename=file.filename if 'file' in locals() and file.filename else None)
+                            filename=file.filename if 'file' in locals() and file.filename else None,
+                            riskLevel=result.get('riskLevel') if result else None)
 
 
 @app.route('/debug')
