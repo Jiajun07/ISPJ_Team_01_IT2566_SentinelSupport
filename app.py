@@ -3,6 +3,7 @@ import os
 import hashlib
 from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify
 from werkzeug.utils import secure_filename
+from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
 from database import create_tenant, db, get_tenant_engine
 from tenant_service import get_db_name_for_company
@@ -22,6 +23,8 @@ import re
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+csrf = CSRFProtect(app)
 
 def sanitize_filename(filename):
     """Sanitize filename while preserving spaces and common characters."""
@@ -43,9 +46,8 @@ fileProcessor = FileProcessor(fileConfigPath)
 
 @app.route("/", methods=["GET", "POST"])
 def home():
-    return render_template("home.html")
+    return render_template("front_page.html")
 
-app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
     "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
@@ -514,18 +516,31 @@ def verify_email(token):
     return redirect(url_for('login'))
 
 
-@app.route('/reset-password/<token>', methods=['GET', 'POST'])
-def reset_password(token):
-    try:
-        email = s.loads(token, salt='password-reset', max_age=3600)
-    except SignatureExpired:
-        flash("The password reset link has expired.", "danger")
-        return redirect(url_for('forget_password'))
-    except Exception as e:
-        flash("Invalid or expired token.", "danger")
-        return redirect(url_for('forget_password'))
+# @app.route('/reset-password', methods=['GET', 'POST'])
+# def reset_password():
+# #     try:
+# #         email = s.loads(token, salt='password-reset', max_age=3600)
+# #     except SignatureExpired:
+# #         flash("The password reset link has expired.", "danger")
+# #         return redirect(url_for('forget_password'))
+# #     except Exception:
+# #         flash("Invalid or expired token.", "danger")
+# #         return redirect(url_for('forget_password'))
 
-    form = ResetPasswordForm()
+#     form = ResetPasswordForm()
+#     if form.validate_on_submit():
+#         user = User.query.filter_by(email=email).first()
+#         if user:
+#             user.set_password(form.password.data)
+#             db.session.commit()
+#             flash("Your password has been updated successfully.", "success")
+#             return redirect(url_for('login'))
+#         else:
+#             flash("User not found.", "danger")
+#             return redirect(url_for('forget_password'))
+
+#     return render_template('reset_password.html', form=form)
+
 
 
 def policyEngine(file):
