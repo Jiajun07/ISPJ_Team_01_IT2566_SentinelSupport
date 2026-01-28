@@ -42,6 +42,13 @@ class DLPScanner:
                 r"^[a-zA-Z\s]+$"  # letters with spaces
             ]
         })
+        self.action_handler = self.config.get("action_handler", {
+            "denyThreshold": 0.7,
+            "criticalCounts": 1,
+            "highSeverityCounts": 3,
+            "strictMode": True,
+            "allowedCategories": []
+        })
 
         if PRESIDIO_AVAILABLE:
             configuration = {
@@ -116,6 +123,13 @@ class DLPScanner:
                     r"^[a-zA-Z]+$", 
                     r"^[a-zA-Z\s]+$"
                 ]
+            },
+            "decision_settings": {
+                "denyThreshold": 30,
+                "criticalCounts": 1,
+                "highSeverityCounts": 3,
+                "strictMode": False,
+                "allowedCategories": ["low_risk"]
             }
         }
 
@@ -156,7 +170,7 @@ class DLPScanner:
 
     def scan_text(self, text: str) -> List[DLPMatcher]:
         matches = []
-        minConfidence = self.settings.get("minimun_confidence", 0.5)
+        minConfidence = self.settings.get("minimum_confidence", 0.5)
         for patternName, patternDetails in self.patterns.items():
             for match in patternDetails['regex'].finditer(text):
                 matchedText = match.group()
@@ -217,6 +231,52 @@ class DLPScanner:
         matches.extend(entropy_matches) 
         
         return matches
+    
+    def makeDecision(self, matches: List[DLPMatcher]) -> Dict[str, Any]:
+        riskAssessment = self.calculateRisk(matches)
+        denyThreshold = self.action_handler.get("denyThreshold", 0.7)
+        criticalCounts = self.action_handler.get("criticalCounts", 1)
+        highSeverityCounts = self.action_handler.get("highSeverityCounts", 3)
+        strictMode = self.action_handler.get("strictMode", True)
+        allowedCategories = self.action_handler.get("allowedCategories", [])
+
+        filteredMatches = []
+        for match in matches:
+            if match.keywordCategory not in allowedCategories:
+                filteredMatches.append(match)
+
+        decision = "Processed File is Allowed to be Downloaded"
+        reasons = []
+
+        if strictMode and len(filteredMatches) > 0:
+            decision = "Processed File is NOT Allowed to be Downloaded"
+            reasons.append(f"Processed File is NOT Allowed to be Downloaded")
+        elif riskAssessment['severity_breakdown']["High"] >= highSeverityCounts:
+            decision = "Processed File is NOT Allowed to be Downloaded"
+            reasons.append(f"Processed File is NOT Allowed to be Downloaded")
+        elif riskAssessment['severity_breakdown']["Critical"] >= criticalCounts:
+            decision = "Processed File is NOT Allowed to be Downloaded"
+            reasons.append(f"Processed File is NOT Allowed to be Downloaded")
+        elif riskAssessment['score'] >= denyThreshold:
+            decision = "Processed File is NOT Allowed to be Downloaded"
+            reasons.append(f"Processed File is NOT Allowed to be Downloaded")
+        else:
+            decision = "Processed File is Allowed to be Downloaded"
+            if len(filteredMatches) > 0:
+                reasons.append(f"Processed File is Allowed to be Downloaded")
+        return {
+            "decision": decision,
+            "reasons": reasons
+        }
+    
+    def scan_and_decide(self, text: str) -> Dict[str, Any]:
+        matches = self.scan_text(text)
+        return self.makeDecision(matches)
+    
+    def scan_ocr_and_decide(self, ocr_text: str) -> Dict[str, Any]:
+        matches = self.scanOCRText(ocr_text)
+        return self.makeDecision(matches)
+    
 
 
 #============== Sensitive keywords Scanning ===================    
@@ -365,10 +425,8 @@ class DLPScanner:
     def isHighEntropyString(self, text: str) -> bool:
         if not self.entropy_settings.get("enabled", True):
             return False
-        
         if len(text) < self.entropy_settings.get("min_length", 8):
             return False
-        
         for pattern in self.entropy_settings.get("exclude_common_patterns", []):
             if re.match(pattern, text):
                 return False
@@ -387,7 +445,6 @@ class DLPScanner:
 
         for pattern in re.finditer(entropyPattern, text):
             pattern2 = pattern.group()
-
             if self.isHighEntropyString(pattern2):
                 entropyValue = self.calculateEntropy(pattern2)
                 confidence = min(1.0, entropyValue / self.entropy_settings.get("max_entropy", 7.0))
@@ -403,5 +460,139 @@ class DLPScanner:
                     severity=self.entropy_settings.get("severity", "High"),
                     keywordCategory='entropy',
                     keywordDescription='High entropy string detected'
+                ))
+        return matches
+    
+#=============================================================
+
+#===================== OCR ===================================
+    
+    def scanOCRText(self, ocr_text: str) -> List[DLPMatcher]:
+        matches = []
+        regexMatches = self.scanOCRWithPatterns(ocr_text)
+        matches.extend(regexMatches)
+        keywordMatches = self.scanOCRWithKeywords(ocr_text)
+        matches.extend(keywordMatches)
+        if PRESIDIO_AVAILABLE:
+            presidioMatches = self.scan_with_presidio(ocr_text)
+            matches.extend(presidioMatches)
+        entropyMatches = self.scanEntropy(ocr_text)
+        matches.extend(entropyMatches)
+        return matches
+    
+    def scanOCRWithPatterns(self, ocr_text: str) -> List[DLPMatcher]:
+        matches = []
+        minConfidence = self.settings.get("minimum_confidence", 0.5)
+    
+        for patternName, patternDetails in self.patterns.items():
+            for match in patternDetails['regex'].finditer(ocr_text):
+                matchedText = match.group()
+                isValid = True
+                if patternDetails['validate']:
+                    isValid = patternDetails['validate'](matchedText)
+                if isValid:
+                    confidence = 1.0
+                    if confidence >= minConfidence:
+                        start, end = match.start(), match.end()
+                        context = self._get_context(ocr_text, start, end)
+                        matches.append(DLPMatcher(
+                            closestDetectedRule=f"OCR_{patternName}",
+                            matchedText=matchedText,
+                            scanConfidence=confidence,
+                            startOfMatch=start,
+                            endOfMatch=end,
+                            contextBeforeAfterMatch=context,
+                            severity=patternDetails['severity'],
+                            keywordCategory='ocr_pattern',
+                            keywordDescription=f"OCR detected pattern: {patternName}"
+                        ))
+        return matches
+    
+    def scanOCRWithKeywords(self, ocr_text: str) -> List[DLPMatcher]:
+        matches = []
+        caseSensitive = self.settings.get("case_sensitive", False)
+        wholeWordOnly = self.settings.get("whole_word_only", True)
+        minConfidence = self.settings.get("minimum_confidence", 0.5)
+
+        for category, categoryInfo in self.keywords.items():
+            for keyword in categoryInfo['terms']:
+                if wholeWordOnly:
+                    pattern = r'\b' + re.escape(keyword) + r'\b'
+                else:
+                    pattern = re.escape(keyword)
+                upperCaseDeterminer = 0 if caseSensitive else re.IGNORECASE
+                patternRegex = re.compile(pattern, upperCaseDeterminer)
+                for match in patternRegex.finditer(ocr_text):
+                    matchedText = match.group()
+                    confidence = 0.6
+                    if confidence >= minConfidence:
+                        start, end = match.start(), match.end()
+                        context = self._get_context(ocr_text, start, end)
+                        matches.append(DLPMatcher(
+                            closestDetectedRule=f"OCR_{keyword}",
+                            matchedText=matchedText,
+                            scanConfidence=confidence,
+                            startOfMatch=start,
+                            endOfMatch=end,
+                            contextBeforeAfterMatch=context,
+                            severity=categoryInfo.get("severity", "Low"),
+                            keywordCategory='ocr_keyword',
+                            keywordDescription=f"OCR detected keyword: {keyword}"
+                        ))
+        return matches
+    
+    def scanOCRWithPresidio(self, ocr_text: str) -> List[DLPMatcher]:
+        matches = []
+        entitites_to_detect = ["CREDIT_CARD", "EMAIL_ADDRESS", "IP_ADDRESS", "PHONE_NUMBER"]
+        if not self.analyzer:
+            return []
+        try:
+            results = self.analyzer.analyze(text=ocr_text, entities=entitites_to_detect, language='en')
+            severity_map = {"CREDIT_CARD": "Critical", "EMAIL_ADDRESS": "Medium", "IP_ADDRESS": "High", "PHONE_NUMBER": "Medium"}
+            for result in results:
+                if result.score < 0.5:
+                    continue
+                matchedText = ocr_text[result.start:result.end]
+                context = self._get_context(ocr_text, result.start, result.end)
+                matches.append(DLPMatcher(
+                    closestDetectedRule=f"OCR_presidio_{result.entity_type}",
+                    matchedText=matchedText,
+                    scanConfidence=result.score,
+                    startOfMatch=result.start,
+                    endOfMatch=result.end,
+                    contextBeforeAfterMatch=context,
+                    severity=severity_map.get(result.entity_type, "Medium"),
+                    keywordCategory='ocr_presidio',
+                    keywordDescription=f"OCR Presidio detected entity: {result.entity_type}"
+                ))
+        except Exception as e:
+            print(f"Error during Presidio analysis: {e}")
+        return matches
+    
+    def scanOCRWithEntropy(self, ocr_text: str) -> List[DLPMatcher]:
+        matches = []
+        if not self.entropy_settings.get("enabled", True):
+            return matches
+        min_length = self.entropy_settings.get("min_length", 8)
+        entropyPattern = r'[A-Za-z0-9!@#$%^&*()_+\-=\[\]{};\'\\:"|<,./<>?]{' + str(min_length) + r',}'
+
+        for pattern in re.finditer(entropyPattern, ocr_text):
+            pattern2 = pattern.group()
+
+            if self.isHighEntropyString(pattern2):
+                entropyValue = self.calculateEntropy(pattern2)
+                confidence = min(1.0, entropyValue / self.entropy_settings.get("max_entropy", 7.0))
+                start, end = pattern.start(), pattern.end()
+                context = self._get_context(ocr_text, start, end)
+                matches.append(DLPMatcher(
+                    closestDetectedRule="OCR_High Entropy String",
+                    matchedText=pattern2,
+                    scanConfidence=confidence,
+                    startOfMatch=start,
+                    endOfMatch=end,
+                    contextBeforeAfterMatch=context,
+                    severity=self.entropy_settings.get("severity", "High"),
+                    keywordCategory='ocr_entropy',
+                    keywordDescription='OCR High entropy string detected'
                 ))
         return matches

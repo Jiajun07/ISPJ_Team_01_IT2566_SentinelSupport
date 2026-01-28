@@ -7,6 +7,7 @@ from werkzeug.datastructures import FileStorage
 from docx import Document
 from pptx import Presentation
 from pandas import read_excel
+from DLPScannerModules.OCRProcessor import performOCRandScan
 
 try:
     import pypdf
@@ -133,6 +134,8 @@ class FileProcessor:
                     return self.readTextFromExcelFile(file)
                 elif ext == '.pptx':
                     return self.readTextFromPPTXFile(file)
+            elif ext in self.supported_extensions.get("image_files", set()):
+                return self.readTextFromOCRScanner(file)
             else:
                 raise ValueError(f"Unsupported file type: {ext}")
         except Exception as e:
@@ -243,5 +246,10 @@ class FileProcessor:
             return "\n".join(texts)
         except Exception as e:
             raise ValueError(f"Error reading text file in zip archive: {e}") from e
-
-            
+    
+    def readTextFromOCRScanner(self, image_path: FileStorage) -> str:
+        try:
+            ocr_text = performOCRandScan(image_path)
+            return ocr_text
+        except Exception as e:
+            raise ValueError(f"Error performing OCR on image file '{image_path.filename}': {str(e)}") from e
