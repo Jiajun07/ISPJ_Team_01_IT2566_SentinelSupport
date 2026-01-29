@@ -1,12 +1,13 @@
 from flask import Flask, render_template, redirect, url_for, flash, session
 from flask_wtf import FlaskForm
 from wtforms import (StringField, TextAreaField, SelectField, SubmitField, DateField, TimeField, PasswordField, FileField,
-                     RadioField, FieldList, FormField)
+                     RadioField, FieldList, FormField, BooleanField)
 from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError, Optional, Regexp
 from flask_wtf.file import FileAllowed
 from markupsafe import escape
 from datetime import datetime, timedelta
 import re
+
 
 
 def password_complexity_check(form, field):
@@ -49,3 +50,26 @@ class ResetPasswordForm(FlaskForm):
     password = PasswordField('Password', validators=[DataRequired(), Length(max=64), password_complexity_check])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     submit = SubmitField('Reset Password')
+
+
+class TenantDeactivateForm(FlaskForm):
+    # Compliance confirmation (required)
+    compliance_confirm = BooleanField(
+        'Confirm compliance data export',
+        validators=[DataRequired(message="You must confirm data export")]
+    )
+
+    # Retention period
+    retention_days = RadioField(
+        'Retention after deactivation',
+        choices=[
+            ('30', '30 days (Recommended)'),
+            ('60', '60 days'),
+            ('90', '90 days')
+        ],
+        default='30',
+        validators=[DataRequired()]
+    )
+
+    # Submit button
+    submit = SubmitField('Confirm Deactivation')

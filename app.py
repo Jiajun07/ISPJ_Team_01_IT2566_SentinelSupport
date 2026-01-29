@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from database import create_tenant, db, MasterSessionLocal
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
-from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm
+from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm
 from werkzeug.security import generate_password_hash, check_password_hash
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -16,6 +16,9 @@ from datetime import datetime
 from sqlalchemy import text
 import os
 import smtplib
+from datetime import datetime, timedelta
+from database import archive_tenant, get_tenant_stats, Tenant
+import subprocess
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
@@ -85,6 +88,52 @@ def list_documents():
     session = get_tenant_session()
     rows = session.execute("SELECT id, file_path, classification FROM documents").fetchall()
     return {"documents": [dict(r) for r in rows]}
+
+
+@app.route('/admin/tenant/<int:tenant_id>/deactivate', methods=['GET', 'POST'])
+def tenant_deactivate_page(tenant_id):
+    """Tenant deactivation page with WTForms"""
+    tenant = Tenant.query.get_or_404(tenant_id)
+    stats = get_tenant_stats(tenant_id)
+    form = TenantDeactivateForm()
+
+    if form.validate_on_submit():
+        # Form passed validation - process deactivation
+        retention_days = int(form.retention_days.data)
+        archive_date = datetime.now() + timedelta(days=retention_days)
+
+        # Archive tenant
+        archived = archive_tenant(tenant_id)
+
+        if archived:
+            # Create backup
+            backup_file = backup_tenant(tenant_id)
+
+            flash(f"""
+                Tenant '{tenant.company_name}' archived successfully!<br>
+                Retention period: {retention_days} days<br>
+                Backup saved: {backup_file}
+            """, "success")
+            return redirect(url_for('admin_tenants'))
+        else:
+            flash("Failed to archive tenant", "danger")
+
+    return render_template('admin/tenant_deactivate.html',
+                           tenant=tenant, stats=stats, form=form)
+def backup_tenant(tenant_id: int):
+    """Create backup before archiving"""
+    schema = f"tenant_{tenant_id}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = f"backups/{schema}_archive_{timestamp}.sql"
+
+    cmd = [
+        'pg_dump', '-h', 'localhost', '-p', '5432', '-U', 'postgres',
+        f'--schema={schema}', '--no-owner', '--no-privileges',
+        '-f', backup_file, 'sdsm_master'
+    ]
+    subprocess.run(cmd, env={"PGPASSWORD": "Jiajun07@@2025"})
+    return backup_file
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
