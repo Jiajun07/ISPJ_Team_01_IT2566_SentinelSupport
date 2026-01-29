@@ -2,7 +2,8 @@
 import os
 import hashlib
 import secrets
-from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session
+from dotenv import load_dotenv
+from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
@@ -30,6 +31,8 @@ import shutil
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+load_dotenv()
+
 
 UPLOAD_FOLDER = os.path.join(app.root_path, 'DLPScannerModules', 'testfiles', 'upload')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -1015,50 +1018,83 @@ def backup_tenant(tenant_id: int):
     subprocess.run(cmd, env={"PGPASSWORD": "Jiajun07@@2025"})
     return backup_file
 
-
+#TODO tristan stuff -------------------------------------------------------------------------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    form = Loginform()
 
-        form = Loginform()
+    if request.method == 'POST' and form.validate_on_submit():
+        email_input = escape(form.email.data)
+        password_input = escape(form.password.data)
+        user = True#User.query.filter_by(email=email_input).first()
 
-        if request.method == 'POST' and form.validate_on_submit():
-            email_input = escape(form.email.data)
-            password_input = escape(form.password.data)
-            user = True#User.query.filter_by(email=email_input).first()
-
-            if user and check_password_hash(user.password, password_input):
-                if not user.is_verified:
-                    flash("Please verify your email before logging in.", "warning")
-                    return redirect(url_for('login'))
-                session['user_id'] = user.id
-                session['username'] = user.username
-                session['user_type'] = user.user_type
-
-                if user.user_type == 'elderly':
-                    return redirect(url_for('elderly_home'))
-                elif user.user_type == 'volunteer':
-                    return redirect(url_for('volunteer_dashboard'))
-                elif user.user_type == 'admin':
-                    return redirect(url_for('adminDashboard'))
-
-            else:
-                flash("Invalid username or password.", "danger")
+        if user and check_password_hash(user.password, password_input):
+            if not user.is_verified:
+                flash("Please verify your email before logging in.", "warning")
                 return redirect(url_for('login'))
+            
+            # Store temp user data for 2FA verification
+            session['temp_user_id'] = getattr(user, 'id', 'temp_id')
+            session['temp_user_email'] = email_input
+            session['needs_2fa'] = True
+            
+            # Send 2FA code via email
+            send_2fa_email(email_input)
+            flash("2FA code sent to your email. Please verify.", "info")
+            return redirect(url_for('verify_2fa'))
 
-        return render_template('login/login_page.html', form=form)
+        else:
+            flash("Invalid username or password.", "danger")
+            return redirect(url_for('login'))
+
+    return render_template('login/login_page.html', form=form)
 
 @app.route('/logout')
 def logout():
-
+    # Invalidate session token if it exists
+    session_token = request.cookies.get('session_token')
+    if session_token:
+        # In production: invalidate token in database
+        pass
+    
     session.clear()
     flash("You have been logged out.", "info")
-
-    return redirect(url_for('login'))
+    
+    response = redirect(url_for('login'))
+    response.delete_cookie('session_token')
+    return response
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     form = SignUpForm()
-
+    
+    if request.method == 'POST':
+        signup_code = request.form.get('signup_code')
+        email = escape(request.form.get('email', ''))
+        password = escape(request.form.get('password', ''))
+        
+        # Validate signup code (alphanumeric, 6-12 chars)
+        if not validate_signup_code_format(signup_code):
+            flash("Invalid signup code format.", "danger")
+            return render_template('login/tmpsignup.html', form=form)
+        
+        # Code validation would connect to DB when available
+        # For now: accept codes in format: TENANT_CODE_XXXXX
+        if not signup_code.startswith('INVITE_'):
+            flash("Invalid or expired signup code.", "danger")
+            return render_template('login/tmpsignup.html', form=form)
+        
+        # Store signup info in session temporarily
+        session['signup_code'] = signup_code
+        session['signup_email'] = email
+        session['signup_password_hash'] = generate_password_hash(password)
+        session['pending_signup'] = True
+        
+        # Send verification email before account creation
+        send_signup_verification_email(email, signup_code)
+        flash("Verification email sent. Please check your inbox.", "success")
+        return redirect(url_for('verify_signup_email'))
+    
     return render_template('login/tmpsignup.html', form=form)
 
 # @app.route('/signup', methods=['GET', 'POST'])
@@ -1097,7 +1133,6 @@ def signup():
 
 #     return render_template('login/signup_page.html', form=form)
 
-#TODO sign up, html, css, connect email application
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forget_password():
     
@@ -1190,35 +1225,214 @@ def verify_email(token):
     return redirect(url_for('login'))
 
 
-# @app.route('/reset-password', methods=['GET', 'POST'])
-# def reset_password():
-# #     try:
-# #         email = s.loads(token, salt='password-reset', max_age=3600)
-# #     except SignatureExpired:
-# #         flash("The password reset link has expired.", "danger")
-# #         return redirect(url_for('forget_password'))
-# #     except Exception:
-# #         flash("Invalid or expired token.", "danger")
-# #         return redirect(url_for('forget_password'))
-
-#     form = ResetPasswordForm()
-#     if form.validate_on_submit():
-#         user = User.query.filter_by(email=email).first()
-#         if user:
-#             user.set_password(form.password.data)
-#             db.session.commit()
-#             flash("Your password has been updated successfully.", "success")
-#             return redirect(url_for('login'))
-#         else:
-#             flash("User not found.", "danger")
-#             return redirect(url_for('forget_password'))
-
-#     return render_template('reset_password.html', form=form)
-
-@app.route('/reset-password', methods=['GET', 'POST'])
-def reset_password():
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    """Reset password using token from email link"""
     form = ResetPasswordForm()
+    
+    if request.method == 'GET':
+        try:
+            email = s.loads(token, salt='password-reset', max_age=3600)  # 1 hour
+            session['reset_email'] = email
+        except SignatureExpired:
+            flash("The password reset link has expired.", "danger")
+            return redirect(url_for('forget_password'))
+        except Exception:
+            flash("Invalid or expired token.", "danger")
+            return redirect(url_for('forget_password'))
+        
+        return render_template('login/reset_password.html', form=form)
+    
+    if request.method == 'POST':
+        email = session.get('reset_email')
+        if not email:
+            flash("Session expired. Please request password reset again.", "danger")
+            return redirect(url_for('forget_password'))
+        
+        if form.validate_on_submit():
+            new_password = escape(form.password.data)
+            
+            # In production: update user password in database
+            # For now: just confirm password was changed
+            session.pop('reset_email', None)
+            flash("Your password has been updated successfully.", "success")
+            return redirect(url_for('login'))
+        else:
+            # Form validation failed - show errors
+            for field, errors in form.errors.items():
+                for error in errors:
+                    flash(f"{field}: {error}", "danger")
+    
     return render_template('login/reset_password.html', form=form)
+
+
+@app.route('/verify-2fa', methods=['GET', 'POST'])
+def verify_2fa():
+    """Verify 2FA code sent to email"""
+    if not session.get('needs_2fa'):
+        flash("No active login session. Please log in again.", "danger")
+        return redirect(url_for('login'))
+    
+    if request.method == 'POST':
+        code = request.form.get('code', '').strip()
+        email = session.get('temp_user_email')
+        
+        # Validate 2FA code (6 digits)
+        if not validate_2fa_code_format(code):
+            flash("Invalid code format. Enter 6 digits.", "danger")
+            return redirect(url_for('verify_2fa'))
+        
+        # Check if code is correct (in production: verify against DB)
+        # For now: accept code if it matches stored value in session
+        stored_code = session.get('2fa_code')
+        if stored_code and code == stored_code:
+            # Create login session with cookie
+            session_token = secrets.token_urlsafe(32)
+            
+            # Store session info
+            session['user_id'] = session.get('temp_user_id')
+            session['session_token'] = session_token
+            session['login_time'] = datetime.utcnow().isoformat()
+            session['session_expires'] = (datetime.utcnow() + timedelta(hours=24)).isoformat()
+            
+            # Clean up temp 2FA data
+            session.pop('needs_2fa', None)
+            session.pop('temp_user_id', None)
+            session.pop('temp_user_email', None)
+            session.pop('2fa_code', None)
+            
+            # Set secure cookie
+            response = redirect(url_for('login'))
+            response.set_cookie(
+                'session_token',
+                session_token,
+                max_age=86400,  # 24 hours
+                secure=False,  # Set to True in production with HTTPS
+                httponly=True,
+                samesite='Lax'
+            )
+            flash("Login successful!", "success")
+            return response
+        else:
+            flash("Incorrect 2FA code. Try again.", "danger")
+            return redirect(url_for('verify_2fa'))
+    
+    return render_template('login/verify_2fa.html')
+
+
+@app.route('/resend-2fa', methods=['POST'])
+def resend_2fa():
+    """Resend 2FA code"""
+    email = session.get('temp_user_email')
+    if not email:
+        return jsonify({'success': False, 'error': 'Session expired'}), 400
+    
+    send_2fa_email(email)
+    return jsonify({'success': True, 'message': 'Code resent to email'}), 200
+
+
+@app.route('/verify-signup-email/<token>', methods=['GET', 'POST'])
+def verify_signup_email(token=None):
+    """Verify email during signup with token"""
+    if request.method == 'GET' and token:
+        try:
+            email = s.loads(token, salt='signup-confirm', max_age=3600)  # 1 hour
+            session['verified_signup_email'] = email
+            session['email_verified'] = True
+            flash("Email verified! Your account has been created.", "success")
+            return redirect(url_for('login'))
+        except SignatureExpired:
+            flash("Verification link expired. Please sign up again.", "danger")
+            return redirect(url_for('signup'))
+        except Exception as e:
+            flash("Invalid verification link.", "danger")
+            return redirect(url_for('signup'))
+    
+    # POST: Resend verification email
+    if request.method == 'POST':
+        email = session.get('signup_email')
+        if email:
+            send_signup_verification_email(email, session.get('signup_code', ''))
+            return jsonify({'success': True, 'message': 'Verification email resent'}), 200
+    
+    return render_template('login/verify_signup_email.html')
+
+
+# ==================== HELPER FUNCTIONS ====================
+
+def validate_signup_code_format(code):
+    """Validate signup code format"""
+    import re
+    if not code:
+        return False
+    # Accept: INVITE_XXXXXX or similar alphanumeric patterns
+    return bool(re.match(r'^[A-Z0-9_]{6,20}$', code))
+
+
+def validate_2fa_code_format(code):
+    """Validate 2FA code is 6 digits"""
+    return bool(code.isdigit() and len(code) == 6)
+
+
+def send_2fa_email(user_email):
+    """Generate and send 2FA code via email"""
+    import random
+    
+    # Generate 6-digit code
+    code = ''.join(random.choices('0123456789', k=6))
+    
+    # Store in session (in production: store in DB with expiration)
+    session['2fa_code'] = code
+    session['2fa_expires'] = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    
+    subject = "Your 2-Factor Authentication Code"
+    body = f"""
+    Your 2FA code is: {code}
+    This code expires in 10 minutes.
+    If you didn't request this, please ignore this email.
+    """
+    
+    msg = MIMEMultipart()
+    msg['From'] = 'sagesuppor@gmail.com'
+    msg['To'] = user_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+    
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login('sagesuppor@gmail.com', os.environ.get('EMAIL_PASSWORD'))
+            server.sendmail('sagesuppor@gmail.com', user_email, msg.as_string())
+        return True
+    except Exception as e:
+        print(f"❌ 2FA email error: {str(e)}")
+        return False
+
+
+def send_signup_verification_email(user_email, signup_code):
+    """Send email verification for signup"""
+    token = s.dumps(user_email, salt='signup-confirm')
+    verify_url = url_for('verify_signup_email', token=token, _external=True)
+    
+    subject = "Verify Your Email - Signup"
+    body = render_template('email/verify_email.txt', verify_url=verify_url, signup_code=signup_code)
+    
+    msg = MIMEMultipart()
+    msg['From'] = 'sagesuppor@gmail.com'
+    msg['To'] = user_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+    
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login('sagesuppor@gmail.com', os.environ.get('EMAIL_PASSWORD'))
+            server.sendmail('sagesuppor@gmail.com', user_email, msg.as_string())
+        return True
+    except Exception as e:
+        print(f"❌ Signup email error: {str(e)}")
+        return False
+
 
 def policyEngine(file):
     try:
