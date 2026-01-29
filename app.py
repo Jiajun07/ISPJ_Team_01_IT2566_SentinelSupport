@@ -33,16 +33,15 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("front_page.html")
 
-app.config['SECRET_KEY'] = 'your_secret_key_here_change_in_production'
 app.config['SQLALCHEMY_DATABASE_URI'] = (
-     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
-     "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
- )
+    "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
+    "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
+)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# # Initialize DB
+# Initialize DB
 # db.init_app(app)
-s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+# s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 
 # Create public.tenants table (run once)
@@ -93,9 +92,9 @@ def login():
         form = Loginform()
 
         if request.method == 'POST' and form.validate_on_submit():
-            username_input = escape(form.username.data)
+            email_input = escape(form.email.data)
             password_input = escape(form.password.data)
-            user = True#User.query.filter_by(username=username_input).first()
+            user = True#User.query.filter_by(email=email_input).first()
 
             if user and check_password_hash(user.password, password_input):
                 if not user.is_verified:
@@ -120,11 +119,17 @@ def login():
 
 @app.route('/logout')
 def logout():
-   
-        session.clear()
-        flash("You have been logged out.", "info")
 
-        return redirect(url_for('login'))
+    session.clear()
+    flash("You have been logged out.", "info")
+
+    return redirect(url_for('login'))
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    form = SignUpForm()
+
+    return render_template('login/tmpsignup.html', form=form)
 
 # @app.route('/signup', methods=['GET', 'POST'])
 # def signup():
@@ -280,7 +285,10 @@ def verify_email(token):
 
 #     return render_template('reset_password.html', form=form)
 
-
+@app.route('/reset-password', methods=['GET', 'POST'])
+def reset_password():
+    form = ResetPasswordForm()
+    return render_template('login/reset_password.html', form=form)
 
 def policyEngine(file):
     try:
