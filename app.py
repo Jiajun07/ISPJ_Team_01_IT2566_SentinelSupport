@@ -119,11 +119,11 @@ def login():
 
 @app.route('/logout')
 def logout():
-   
-        session.clear()
-        flash("You have been logged out.", "info")
 
-        return redirect(url_for('login'))
+    session.clear()
+    flash("You have been logged out.", "info")
+
+    return redirect(url_for('login'))
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
