@@ -2,7 +2,7 @@
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, current_app
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
-from database import create_tenant, db, get_tenant_engine, MasterSessionLocal
+from database import create_tenant, db, MasterSessionLocal
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm
