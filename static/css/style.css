@@ -1,16 +1,14 @@
-/* Background */
 body {
     margin: 0;
     font-family: Arial, sans-serif;
-    background-color: #cfefff; /* light sky blue */
+    background-color: #cfefff;
 }
 
-/* Top Banner */
 .top-bar {
     display: flex;
     align-items: center;
     height: 90px;
-    background-color: #6aa9ff; /* blue banner */
+    background-color: #6aa9ff;
     padding: 0 20px;
 }
 
@@ -22,7 +20,6 @@ body {
     height: 55px;
 }
 
-/* Title */
 .title {
     font-size: 28px;
     font-weight: bold;
@@ -30,15 +27,11 @@ body {
     margin: 0;
 }
 
-/* Content center */
 .content {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: calc(100vh - 90px);
+    width: 100%;
 }
 
-/* Login Card */
+
 .login-card {
     background: white;
     width: 360px;
@@ -54,7 +47,6 @@ body {
     font-size: 20px;
 }
 
-/* Inputs */
 .input-field {
     width: 100%;
     padding: 12px;
@@ -64,7 +56,6 @@ body {
     font-size: 15px;
 }
 
-/* Button */
 .login-btn {
     width: 100%;
     padding: 12px;
@@ -84,4 +75,247 @@ body {
     text-decoration: none;
     display: flex;
     align-items: center;
+}
+
+.hero {
+    width: 100%;
+    height: 380px;
+    background: url("/static/img/frontpageserverimg.png") center / cover no-repeat;
+    position: relative;
+}
+
+.hero-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        rgba(0, 0, 0, 0.35),
+        rgba(0, 0, 0, 0.45)
+    );
+    padding: 70px;
+    color: white;
+}
+
+.hero-overlay h2 {
+    font-size: 38px;
+    margin-bottom: 10px;
+    max-width: 520px;
+}
+
+.hero-overlay p {
+    font-size: 16px;
+    margin-bottom: 25px;
+    max-width: 520px;
+}
+
+.cta-btn {
+    display: inline-block;
+    padding: 14px 28px;
+    background-color: #2f64ff;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.cta-btn:hover {
+    background-color: #1e4ae0;
+}
+
+/* Login Card */
+    .login-card {
+        background-color: white;
+        width: 360px;
+        padding: 30px;
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        text-align: center;
+    }
+
+    .login-card h3 {
+        margin-bottom: 20px;
+        font-weight: bold;
+        color: #333;
+        text-align: left;
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+        text-align: left;
+    }
+
+    .form-control {
+        width: 100%;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        font-size: 1rem;
+        box-sizing: border-box;
+    }
+
+    .form-control:focus {
+        outline: none;
+        border-color: #4A6CFF;
+    }
+
+    .forgot-password {
+        text-align: left;
+        margin-top: 5px;
+    }
+
+    .forgot-password a {
+        font-size: 0.85rem;
+        color: #4A6CFF;
+        text-decoration: none;
+    }
+
+    .forgot-password a:hover {
+        text-decoration: underline;
+    }
+
+    .login-button {
+        margin-top: 20px;
+        width: 100%;
+        padding: 12px;
+        background-color: #4A6CFF;
+        border: none;
+        border-radius: 6px;
+        color: white;
+        font-size: 1rem;
+        font-weight: bold;
+        cursor: pointer;
+    }
+
+    .login-button:hover {
+        background-color: #3B5BDB;
+    }
+
+.auth-page {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 90px); /* account for top-bar */
+    background-color: #D9F3FF;      /* same as previous body background for auth pages */
+    padding: 20px;                   /* optional: spacing for small screens */
+}
+
+.banner-login {
+    position: absolute;
+    top: 20px;          /* adjust to align with top-bar */
+    right: 20px;        /* distance from right edge */
+    background-color: #2f64ff;
+    color: white;
+    padding: 8px 18px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.95rem;
+    z-index: 10;        /* on top of hero/overlay */
+}
+
+.banner-login:hover {
+    background-color: #1e4ae0;
+}
+
+.features {
+    display: flex;
+    justify-content: space-between; /* even spacing */
+    flex-wrap: wrap;                /* wrap on smaller screens */
+    max-width: 1200px;              /* optional: limit width */
+    margin: 60px auto;              /* spacing from hero and center */
+    gap: 20px;                      /* space between cards */
+    padding: 0 20px;                /* padding for small screens */
+}
+
+.feature-card {
+    background-color: white;
+    flex: 1 1 30%;                  /* each card takes ~30% width, grows/shrinks */
+    min-width: 250px;               /* ensures cards don’t get too small */
+    border-radius: 10px;
+    padding: 25px;
+    text-align: center;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.1);
+    transition: transform 0.3s ease;
+}
+
+.feature-card:hover {
+    transform: translateY(-5px);
+}
+
+.feature-card .icon {
+    font-size: 36px;
+    margin-bottom: 15px;
+}
+
+.feature-card h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
+    color: #333;
+}
+
+.feature-card p {
+    font-size: 14px;
+    color: #555;
+    line-height: 1.5;
+}
+
+.reset-page {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 90px); /* adjust for top-bar */
+    background-color: #D9F3FF;
+    padding: 20px;
+}
+
+.reset-card {
+    background: white;
+    width: 360px;
+    padding: 35px 40px;
+    border-radius: 10px;
+    box-shadow: 0px 3px 12px rgba(0, 0, 0, 0.15);
+    text-align: center;
+}
+
+.reset-card h3 {
+    margin-bottom: 25px;
+    text-align: left;
+    font-size: 20px;
+    font-weight: bold;
+    color: #333;
+}
+
+.reset-form-group {
+    margin-bottom: 15px;
+    text-align: left;
+}
+
+.reset-input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 15px;
+    box-sizing: border-box;
+}
+
+.reset-input:focus {
+    outline: none;
+    border-color: #4A6CFF;
+}
+
+.reset-btn {
+    width: 100%;
+    padding: 12px;
+    background-color: #2f64ff;
+    border: none;
+    color: white;
+    font-size: 16px;
+    border-radius: 5px;
+    cursor: pointer;
+    margin-top: 10px;
+}
+
+.reset-btn:hover {
+    background-color: #1e4ae0;
 }

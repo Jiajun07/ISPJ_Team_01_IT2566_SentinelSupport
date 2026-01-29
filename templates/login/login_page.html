@@ -106,26 +106,26 @@
     }
 </style>
 
+<div class="auth-page">
+    <div class="login-card">
+        <h3>Login</h3>
 
-<div class="login-card">
-    <h3>Login</h3>
+        <form method="POST">
+            {{ form.hidden_tag() }}
 
-    <form method="POST">
-        {{ form.hidden_tag() }}
-
-        <div class="form-group">
-            {{ form.email(class="form-control", placeholder="Email") }}
-        </div>
-
-        <div class="form-group">
-            {{ form.password(class="form-control", placeholder="Password") }}
-            <div class="forgot-password">
-                <a href="/forgot-password">Forgot Password?</a>
+            <div class="form-group">
+                {{ form.email(class="form-control", placeholder="Email") }}
             </div>
-        </div>
 
-        {{ form.submit(class="login-button") }}
-    </form>
+            <div class="form-group">
+                {{ form.password(class="form-control", placeholder="Password") }}
+                <div class="forgot-password">
+                    <a href="/forgot-password">Forgot Password?</a>
+                </div>
+            </div>
+
+            {{ form.submit(class="login-button") }}
+        </form>
+    </div>
 </div>
-
 {% endblock %}

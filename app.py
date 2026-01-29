@@ -1,5 +1,6 @@
 # app.py
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, current_app
+from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
 from database import create_tenant, db, get_tenant_engine, MasterSessionLocal
 from tenant_service import get_db_name_for_company
@@ -20,6 +21,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
+#csrf = CSRFProtect(app)
+
 configPath = os.path.join(app.root_path, "config", "keywords.json")
 fileConfigPath = os.path.join(app.root_path, "config", "supportedfiles.json")
 
@@ -28,11 +31,18 @@ fileProcessor = FileProcessor(fileConfigPath)
 
 @app.route("/", methods=["GET", "POST"])
 def home():
-    return render_template("home.html")
+    return render_template("front_page.html")
 
+<<<<<<< HEAD
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here_change_in_production'
 app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://postgres:Jiajun07@@2025@localhost:5432/sdsm_master"
+=======
+app.config['SQLALCHEMY_DATABASE_URI'] = (
+    "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
+    "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
+)
+>>>>>>> 6313fdf51b376444124eca0b825272c089fd08bf
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize DB
@@ -250,41 +260,56 @@ def verify_email(token):
     return redirect(url_for('login'))
 
 
-@app.route('/reset-password/<token>', methods=['GET', 'POST'])
-def reset_password(token):
-    try:
-        email = s.loads(token, salt='password-reset', max_age=3600)
-    except SignatureExpired:
-        flash("The password reset link has expired.", "danger")
-        return redirect(url_for('forget_password'))
-    except Exception as e:
-        flash("Invalid or expired token.", "danger")
-        return redirect(url_for('forget_password'))
+# @app.route('/reset-password', methods=['GET', 'POST'])
+# def reset_password():
+# #     try:
+# #         email = s.loads(token, salt='password-reset', max_age=3600)
+# #     except SignatureExpired:
+# #         flash("The password reset link has expired.", "danger")
+# #         return redirect(url_for('forget_password'))
+# #     except Exception:
+# #         flash("Invalid or expired token.", "danger")
+# #         return redirect(url_for('forget_password'))
 
-    form = ResetPasswordForm()
+#     form = ResetPasswordForm()
+#     if form.validate_on_submit():
+#         user = User.query.filter_by(email=email).first()
+#         if user:
+#             user.set_password(form.password.data)
+#             db.session.commit()
+#             flash("Your password has been updated successfully.", "success")
+#             return redirect(url_for('login'))
+#         else:
+#             flash("User not found.", "danger")
+#             return redirect(url_for('forget_password'))
+
+#     return render_template('reset_password.html', form=form)
+
 
 
 def policyEngine(file):
     try:
         if not fileProcessor.passedProcessing(file):
             return {'status': 'error', 'message': 'File type not supported for DLP scanning.'}
-        extractResult = fileProcessor.readTextFromFile(file)
-        textContent = extractResult
-        dlpMatches = dlpScanner.scan_text(textContent)
-        riskAssessment = dlpScanner.calculateRisk(dlpMatches)
-        scanResult = {
-            'timestamp': datetime.now().isoformat(),
-            'matches': dlpMatches,
-            'riskAssessment': riskAssessment,
-            'textPreview': textContent[:500] + '...' if len(textContent) > 500 else textContent,
-            'fileInformation': fileProcessor.getFileInfo(file)
-        }
-        return {'status': 'success', 'data': scanResult}
+        ext = fileProcessor.getFileExtension(file.filename)
+        if ext in fileProcessor.supported_extensions.get("image_files", set()):
+            extractResult = fileProcessor.readTextFromFile(file)
+            decision_result = dlpScanner.scan_ocr_and_decide(extractResult)
+        else:
+            extractResult = fileProcessor.readTextFromFile(file)
+            decision_result = dlpScanner.scan_and_decide(extractResult)
+        return {'status': 'success',
+                'decision': decision_result['decision'],
+                'reasons': decision_result['reasons'],
+                'fileName': fileProcessor.getFileInfo(file),
+                'riskLevel': decision_result.get('riskLevel')
+            }
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
 
 @app.route('/autodlp', methods=['GET', 'POST'])
 def autodlp():
+    result = None 
     if request.method == 'POST':      
         if 'file' not in request.files:
             flash('No file part', 'error')
@@ -293,19 +318,23 @@ def autodlp():
         if file.filename == '':
             flash('No selected file', 'error')
             return redirect(request.url)
+        
         result = policyEngine(file)
-        if result['status'] == 'success':
-            # DEBUG: Print all matches found
-            print(f"\n=== DLP SCAN DEBUG ===")
-            print(f"Total matches: {len(result['data']['matches'])}")
-            for match in result['data']['matches']:
-                print(f"  - {match.closestDetectedRule}: '{match.matchedText}' (confidence: {match.scanConfidence})")
-            print(f"======================\n")
-            return render_template("SuperAdmin/autodlp.html", result=result['data'], filename=file.filename)
-        else:
+        if 'status' in result and result['status'] == 'error':
             flash(result['message'], 'error')
             return redirect(request.url)
-    return render_template("SuperAdmin/autodlp.html")
+        else:
+            decision = result.get('decision')
+            reasons = result.get('reasons', [])
+            if decision == 'deny':
+                flash(f'File DENIED - {"; ".join(reasons)}', 'error') 
+            else:
+                flash(f'File ALLOWED - {"; ".join(reasons)}', 'success')   
+    return render_template("SuperAdmin/autodlp.html",
+                            decision=result.get('decision') if result else None,
+                            reasons=result.get('reasons') if result else None,
+                            filename=file.filename if 'file' in locals() and file.filename else None,
+                            riskLevel=result.get('riskLevel') if result else None)
 
 
 @app.route('/debug')
