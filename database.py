@@ -2,7 +2,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.engine import Engine
 import bcrypt
 
 # Supabase connection (same as your app.py)
