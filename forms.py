@@ -34,7 +34,6 @@ class Loginform(FlaskForm):
 
 #cleanup usernames
 class SignUpForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired(), Length(max=64)])
     email = StringField('Email', validators=[DataRequired(), Email()])
     password = PasswordField('Password', validators=[DataRequired(), Length(max=64), password_complexity_check])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
