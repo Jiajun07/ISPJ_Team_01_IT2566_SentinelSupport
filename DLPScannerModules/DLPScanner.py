@@ -266,7 +266,8 @@ class DLPScanner:
                 reasons.append(f"Processed File is Allowed to be Downloaded")
         return {
             "decision": decision,
-            "reasons": reasons
+            "reasons": reasons,
+            "riskLevel": riskAssessment['level']
         }
     
     def scan_and_decide(self, text: str) -> Dict[str, Any]:
