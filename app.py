@@ -2,7 +2,7 @@
 import os
 import hashlib
 import secrets
-from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify
+from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
@@ -11,7 +11,6 @@ from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired
@@ -19,7 +18,6 @@ from DLPScannerModules.DLPScanner import DLPScanner
 from DLPScannerModules.FileProcessor import FileProcessor
 from datetime import datetime, timedelta
 from sqlalchemy import text
-import os
 import smtplib
 import re
 import json
