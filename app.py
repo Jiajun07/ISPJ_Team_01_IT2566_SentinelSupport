@@ -1284,6 +1284,50 @@ def autodlp():
                             riskLevel=result.get('riskLevel') if result else None,
                             savedFilePath=savedFilePath)
 
+@app.route('/tenant-dlpscanning', methods=['GET', 'POST'])
+def tenant_dlpscanning():
+    result = None 
+    savedFilePath = None
+    if request.method == 'POST':      
+        if 'file' not in request.files:
+            flash('No file part', 'error')
+            return redirect(request.url)
+        file = request.files['file']
+        if file.filename == '':
+            flash('No selected file', 'error')
+            return redirect(request.url)
+        if file and file.filename:
+            filename = secure_filename(file.filename)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            uniqueFilename = f"{timestamp}_{filename}"
+            filePath = os.path.join(current_app.config['UPLOAD_FOLDER'], uniqueFilename)
+            
+            try:
+                file.save(filePath)
+                savedFilePath = filePath
+                flash(f'File uploaded successfully: {uniqueFilename}', 'success')
+                file.seek(0)
+                result = policyEngine(file)
+                if 'status' in result and result['status'] == 'error':
+                    flash(result['message'], 'error')
+                    return redirect(request.url)
+                else:
+                    decision = result.get('decision')
+                    reasons = result.get('reasons', [])
+                    if decision == 'deny':
+                        flash(f'File DENIED - {"; ".join(reasons)}', 'error') 
+                    else:
+                        flash(f'File ALLOWED - {"; ".join(reasons)}', 'success')   
+            except Exception as e:
+                flash(f'Error saving file: {str(e)}', 'error')
+                return redirect(request.url)
+    return render_template("CompanyAdmin/tenant_dlpscanning.html",
+                         scan_result=result,
+                         filename=file.filename if 'file' in locals() and file.filename else None,
+                         last_scan_time=datetime.now(),
+                         database_progress=85,
+                         export_progress=92)
+
 
 @app.route('/debug')
 def debug():

@@ -245,25 +245,25 @@ class DLPScanner:
             if match.keywordCategory not in allowedCategories:
                 filteredMatches.append(match)
 
-        decision = "Processed File is Allowed to be Downloaded"
+        decision = "Processed File is Allowed to be shared"
         reasons = []
 
         if strictMode and len(filteredMatches) > 0:
-            decision = "Processed File is NOT Allowed to be Downloaded"
-            reasons.append(f"Processed File is NOT Allowed to be Downloaded")
+            decision = "Processed File is NOT Allowed to be shared"
+            reasons.append(f"Processed File contains sensitive data")
         elif riskAssessment['severity_breakdown']["High"] >= highSeverityCounts:
-            decision = "Processed File is NOT Allowed to be Downloaded"
-            reasons.append(f"Processed File is NOT Allowed to be Downloaded")
+            decision = "Processed File is NOT Allowed to be shared"
+            reasons.append(f"Processed File contains sensitive data")
         elif riskAssessment['severity_breakdown']["Critical"] >= criticalCounts:
-            decision = "Processed File is NOT Allowed to be Downloaded"
-            reasons.append(f"Processed File is NOT Allowed to be Downloaded")
+            decision = "Processed File is NOT Allowed to be shared"
+            reasons.append(f"Processed File contains sensitive data")
         elif riskAssessment['score'] >= denyThreshold:
-            decision = "Processed File is NOT Allowed to be Downloaded"
-            reasons.append(f"Processed File is NOT Allowed to be Downloaded")
+            decision = "Processed File is NOT Allowed to be shared"
+            reasons.append(f"Processed File contains sensitive data")
         else:
-            decision = "Processed File is Allowed to be Downloaded"
+            decision = "Processed File is Allowed to be shared"
             if len(filteredMatches) > 0:
-                reasons.append(f"Processed File is Allowed to be Downloaded")
+                reasons.append(f"Processed File contains no sensitive data")
         return {
             "decision": decision,
             "reasons": reasons,
