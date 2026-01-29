@@ -1,0 +1,10 @@
+{
+  "tenant_2": {
+    "private": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIGOVYyT3lEuQN9Ilvq37IXwGwMMhcW2m7EEWqGaZe0G+\n-----END PRIVATE KEY-----\n",
+    "public": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAkZhYxSg3/lNNdzVAGxl7nVvsavlt2yveeicQr6r37H4=\n-----END PUBLIC KEY-----\n"
+  },
+  "tenant_1": {
+    "private": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIHujl5xuBcPR6RkKOvFrET/6DNvfjU+3gjAzHsr4Ynh4\n-----END PRIVATE KEY-----\n",
+    "public": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEArf3QZI9csq3yM6g8aRpOJc0gyC/dbRKv4xwwNI1I/wI=\n-----END PUBLIC KEY-----\n"
+  }
+}
