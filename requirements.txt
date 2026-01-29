@@ -27,10 +27,9 @@ py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2, flask_wt
 
 
 
-
 To install Pytessaract:
 1. Download Tesseract OCR from https://github.com/UB-Mannheim/tesseract/wiki
-2. Install the downloaded file and Go to "Edit the system environment variables".
-3. Click on "Environment Variables" > Click on "Path" > Click "Edit" > "New" > Add the path where Tesseract is installed (e.g., C:\Program Files\Tesseract-OCR)
+2. Install the downloaded file and add the installation path to your system environment variables.
+3. Edit system variables > Click on "Path" > Click "Edit" > "New" > Add the path where Tesseract is installed (e.g., C:\Program Files\Tesseract-OCR)
 4. Click OK to save the changes.
-5. Add a new Variable called TESSDATA_PREFIX and set its value to the "C:\Program Files\Tesseract-OCR\tessdata"
+5. Add a new Variable called TESSDATA_PREFIX and set its value to the "tessdata" folder path inside the Tesseract installation directory (e.g., C:\Program Files\Tesseract-OCR\tessdata)

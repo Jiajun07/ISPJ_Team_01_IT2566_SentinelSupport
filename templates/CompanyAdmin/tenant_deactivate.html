@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-10 col-xl-8">
+            <div class="tenant-card p-4 p-lg-5 mb-5">
+                <!-- Header -->
+                <div class="text-center mb-5">
+                    <i class="fas fa-building-shield fa-4x text-primary mb-3"></i>
+                    <h1 class="fw-bold mb-2">Tenant Settings</h1>
+                    <p class="text-muted lead">Customize your database to your needs</p>
+                </div>
+
+                <!-- Status -->
+                <div class="row mb-4">
+                    <div class="col">
+                        <div class="d-flex align-items-center justify-content-center">
+                            <span class="status-badge status-active me-3">
+                                <i class="fas fa-circle me-1"></i> {{ tenant.status|title }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats -->
+                <div class="row g-4 mb-5">
+                    <div class="col-md-4">
+                        <div class="stat-card">
+                            <i class="fas fa-users fa-2x mb-2"></i>
+                            <h3>{{ stats.users }}</h3>
+                            <small>Users</small>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="stat-card">
+                            <i class="fas fa-file-alt fa-2x mb-2"></i>
+                            <h3>{{ stats.documents }}</h3>
+                            <small>Documents</small>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="stat-card">
+                            <i class="fas fa-clipboard-list fa-2x mb-2"></i>
+                            <h3>{{ stats.audit_logs }}</h3>
+                            <small>Audit Logs</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Deactivation Form -->
+                <form method="POST">
+                    {{ form.hidden_tag() }}
+
+                    <!-- Warning Section -->
+                    <div class="alert alert-warning border-0 rounded-4 p-4 mb-4 shadow-sm">
+                        <div class="row align-items-start">
+                            <div class="col-auto">
+                                <i class="fas fa-exclamation-triangle fa-3x text-warning mt-1"></i>
+                            </div>
+                            <div class="col">
+                                <h5 class="fw-bold mb-2">Deactivate Workspace</h5>
+                                <p class="mb-0">
+                                    <strong>"{{ tenant.company_name }}"</strong> will become
+                                    <strong>read-only</strong> for selected period. Backups retained.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Compliance Checkbox -->
+                    <div class="bg-light border rounded-4 p-4 mb-4">
+                        <div class="form-check">
+                            {{ form.compliance_confirm(class="form-check-input", id="compliance-confirm") }}
+                            {{ form.compliance_confirm.label(class="form-check-label fw-semibold fs-6") }}
+                            {% for error in form.compliance_confirm.errors %}
+                                <div class="text-danger small mt-1">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <!-- Retention Radio Buttons -->
+                    <div class="mb-5">
+                        <label class="form-label fw-semibold fs-6 mb-3 d-block">Retention after deactivation:</label>
+                        <div class="row g-3">
+                            {% for subfield in form.retention_days %}
+                                <div class="col-md-4">
+                                    {{ subfield(class="form-check-input") }}
+                                    {{ subfield.label(class="form-check-label") }}
+                                    {% for error in subfield.errors %}
+                                        <div class="text-danger small mt-1">{{ error }}</div>
+                                    {% endfor %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="d-flex gap-3 justify-content-center flex-wrap">
+                        {{ form.submit(class="btn btn-danger btn-lg px-5 py-3 fw-bold shadow-lg",
+                                     id="confirm-btn", render_kw={"disabled": True}) }}
+                        <a href="{{ url_for('admin_tenants') }}" class="btn btn-secondary btn-lg px-5 py-3 fw-bold shadow-lg">
+                            <i class="fas fa-times me-2"></i>Cancel
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const checkbox = document.getElementById('compliance-confirm');
+    const confirmBtn = document.getElementById('confirm-btn');
+
+    checkbox.addEventListener('change', function() {
+        confirmBtn.disabled = !this.checked;
+    });
+
+    document.querySelector('form').addEventListener('submit', function(e) {
+        if (!checkbox.checked) {
+            e.preventDefault();
+            alert('Please confirm compliance data export');
+            return false;
+        }
+
+        return confirm('Are you sure? Tenant will be read-only for selected period.');
+    });
+});
+</script>
+
+<!-- Same styles as before -->
+<style>
+/* ... your existing CSS ... */
+.btn-danger:disabled {
+    background: #6c757d !important;
+    opacity: 0.6;
+}
+</style>
+
+{% endblock %}

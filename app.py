@@ -6,26 +6,37 @@ from flask import Flask, g, render_template, request, redirect, url_for, send_fr
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
-from database import create_tenant, db, get_tenant_engine
+from database import create_tenant, db, MasterSessionLocal
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
-from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm
+from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired
 from DLPScannerModules.DLPScanner import DLPScanner
 from DLPScannerModules.FileProcessor import FileProcessor
-from datetime import datetime
+from datetime import datetime, timedelta
+from sqlalchemy import text
 import os
 import smtplib
 import re
 import json
+from database import archive_tenant, get_tenant_stats, Tenant
+import subprocess
+from forms import BackupRecoveryForm
+import zipfile
 import shutil
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+UPLOAD_FOLDER = os.path.join(app.root_path, 'DLPScannerModules', 'testfiles', 'upload')
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 csrf = CSRFProtect(app)
 
@@ -73,19 +84,28 @@ app.config['SQLALCHEMY_DATABASE_URI'] = (
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db.init_app(app)
+# Initialize DB
+# db.init_app(app)
+# s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
 
 # Create public.tenants table (run once)
-with app.app_context():
-    db.create_all()  # creates Tenant model table
+# with app.app_context():
+#     db.create_all()  # creates Tenant model table
 
-@app.route('/test-tenant', methods=['GET'])
-def test_tenant():
-    with app.app_context():
-        tenant_id, schema_name = create_tenant(
-            "Test Company", "admin@test.com", "pass123"
-        )
-        return f"Created tenant {tenant_id} with schema {schema_name}"
+
+# 🔑 TENANT CONTEXT (SCHEMA SWITCHING) - CRITICAL FIX
+@app.before_request
+def set_tenant_context():
+    """Automatically switch to tenant schema based on company/session"""
+    g.schema_name = None
+    company_name = request.headers.get("X-Company-Name") or session.get('company_name')
+    if company_name:
+        schema_name = get_db_name_for_company(company_name)
+        if schema_name:
+            g.schema_name = schema_name
+            g.company_name = company_name
+
 
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads")
 app.config['PENDING_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads_pending")
@@ -211,18 +231,15 @@ def get_uploaded_files():
     return files
 
 def get_tenant_session():
+    """Get session with search_path set to tenant schema"""
     if "tenant_session" not in g:
-        # Example: company name stored in session or token
-        company_name = request.headers.get("X-Company-Name")  # or from login/session
-        db_name = get_db_name_for_company(company_name)
-        if not db_name:
-            raise RuntimeError("Unknown or inactive tenant")
-        engine = get_tenant_engine(db_name)
-        SessionLocal = sessionmaker(bind=engine)
-        g.tenant_session = SessionLocal()
+        if not g.schema_name:
+            raise RuntimeError("No tenant context - login required")
+
+        session = MasterSessionLocal()
+        session.execute(text(f"SET search_path TO {g.schema_name}, public"))
+        g.tenant_session = session
     return g.tenant_session
-
-
 
 
 #@app.route("/login", methods=["GET", "POST"])
@@ -908,11 +925,12 @@ def download_file(filename):
     
     return send_from_directory(tenant_folder, filename, as_attachment=True, download_name=download_name)
 
+
 @app.teardown_appcontext
-def remove_session(exception=None):
-    sess = g.pop("tenant_session", None)
-    if sess is not None:
-        sess.close()
+def close_sessions(exception=None):
+    if hasattr(g, 'tenant_session'):
+        g.tenant_session.close()
+
 
 @app.route("/documents")
 def list_documents():
@@ -920,15 +938,95 @@ def list_documents():
     rows = session.execute("SELECT id, file_path, classification FROM documents").fetchall()
     return {"documents": [dict(r) for r in rows]}
 
+#Setting Backup and Recovery customization settings
+@app.route('/admin/backup-recovery/<int:tenant_id>', methods=['GET', 'POST'])
+def backup_recovery_page(tenant_id):
+    """Backup & Recovery settings page"""
+    tenant = Tenant.query.get_or_404(tenant_id)
+    stats = get_tenant_stats(tenant_id)
+    form = BackupRecoveryForm()
+
+    last_backup = get_last_backup(tenant_id)  # Your function
+    backups = list_backups(tenant_id)  # Your function
+
+    if form.validate_on_submit():
+        if form.backup_submit.data:
+            # Create backup
+            backup_file = backup_tenant(tenant_id)
+            flash(f"Backup created: {backup_file}", "success")
+
+        elif form.restore_submit.data:
+            # Handle restore
+            if form.backup_file.data:
+                filename = secure_filename(form.backup_file.data.filename)
+                restore_path = f"restores/{filename}"
+                form.backup_file.data.save(restore_path)
+
+                success = restore_backup(tenant_id, restore_path)
+                if success:
+                    flash("Restore completed successfully!", "success")
+                else:
+                    flash("Restore failed", "danger")
+
+    return render_template('admin/backup_recovery.html',
+                           tenant=tenant, stats=stats, form=form,
+                           last_backup=last_backup, backups=backups)
+
+# Deactivation of Tenant
+@app.route('/admin/tenant/<int:tenant_id>/deactivate', methods=['GET', 'POST'])
+def tenant_deactivate_page(tenant_id):
+    """Tenant deactivation page with WTForms"""
+    tenant = Tenant.query.get_or_404(tenant_id)
+    stats = get_tenant_stats(tenant_id)
+    form = TenantDeactivateForm()
+
+    if form.validate_on_submit():
+        # Form passed validation - process deactivation
+        retention_days = int(form.retention_days.data)
+        archive_date = datetime.now() + timedelta(days=retention_days)
+
+        # Archive tenant
+        archived = archive_tenant(tenant_id)
+
+        if archived:
+            # Create backup
+            backup_file = backup_tenant(tenant_id)
+
+            flash(f"""
+                Tenant '{tenant.company_name}' archived successfully!<br>
+                Retention period: {retention_days} days<br>
+                Backup saved: {backup_file}
+            """, "success")
+            return redirect(url_for('admin_tenants'))
+        else:
+            flash("Failed to archive tenant", "danger")
+
+    return render_template('admin/tenant_deactivate.html',
+                           tenant=tenant, stats=stats, form=form)
+def backup_tenant(tenant_id: int):
+    """Create backup before archiving"""
+    schema = f"tenant_{tenant_id}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = f"backups/{schema}_archive_{timestamp}.sql"
+
+    cmd = [
+        'pg_dump', '-h', 'localhost', '-p', '5432', '-U', 'postgres',
+        f'--schema={schema}', '--no-owner', '--no-privileges',
+        '-f', backup_file, 'sdsm_master'
+    ]
+    subprocess.run(cmd, env={"PGPASSWORD": "Jiajun07@@2025"})
+    return backup_file
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
 
         form = Loginform()
 
         if request.method == 'POST' and form.validate_on_submit():
-            username_input = escape(form.username.data)
+            email_input = escape(form.email.data)
             password_input = escape(form.password.data)
-            user = True#User.query.filter_by(username=username_input).first()
+            user = True#User.query.filter_by(email=email_input).first()
 
             if user and check_password_hash(user.password, password_input):
                 if not user.is_verified:
@@ -953,11 +1051,17 @@ def login():
 
 @app.route('/logout')
 def logout():
-   
-        session.clear()
-        flash("You have been logged out.", "info")
 
-        return redirect(url_for('login'))
+    session.clear()
+    flash("You have been logged out.", "info")
+
+    return redirect(url_for('login'))
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    form = SignUpForm()
+
+    return render_template('login/tmpsignup.html', form=form)
 
 # @app.route('/signup', methods=['GET', 'POST'])
 # def signup():
@@ -1113,7 +1217,10 @@ def verify_email(token):
 
 #     return render_template('reset_password.html', form=form)
 
-
+@app.route('/reset-password', methods=['GET', 'POST'])
+def reset_password():
+    form = ResetPasswordForm()
+    return render_template('login/reset_password.html', form=form)
 
 def policyEngine(file):
     try:
@@ -1129,7 +1236,8 @@ def policyEngine(file):
         return {'status': 'success',
                 'decision': decision_result['decision'],
                 'reasons': decision_result['reasons'],
-                'fileName': fileProcessor.getFileInfo(file)
+                'fileName': fileProcessor.getFileInfo(file),
+                'riskLevel': decision_result.get('riskLevel')
             }
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
@@ -1137,6 +1245,7 @@ def policyEngine(file):
 @app.route('/autodlp', methods=['GET', 'POST'])
 def autodlp():
     result = None 
+    savedFilePath = None
     if request.method == 'POST':      
         if 'file' not in request.files:
             flash('No file part', 'error')
@@ -1145,22 +1254,37 @@ def autodlp():
         if file.filename == '':
             flash('No selected file', 'error')
             return redirect(request.url)
-        
-        result = policyEngine(file)
-        if 'status' in result and result['status'] == 'error':
-            flash(result['message'], 'error')
-            return redirect(request.url)
-        else:
-            decision = result.get('decision')
-            reasons = result.get('reasons', [])
-            if decision == 'deny':
-                flash(f'File DENIED - {"; ".join(reasons)}', 'error') 
-            else:
-                flash(f'File ALLOWED - {"; ".join(reasons)}', 'success')   
+        if file and file.filename:
+            filename = secure_filename(file.filename)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            uniqueFilename = f"{timestamp}_{filename}"
+            filePath = os.path.join(current_app.config['UPLOAD_FOLDER'], uniqueFilename)
+            
+            try:
+                file.save(filePath)
+                savedFilePath = filePath
+                flash(f'File uploaded successfully: {uniqueFilename}', 'success')
+                file.seek(0)
+                result = policyEngine(file)
+                if 'status' in result and result['status'] == 'error':
+                    flash(result['message'], 'error')
+                    return redirect(request.url)
+                else:
+                    decision = result.get('decision')
+                    reasons = result.get('reasons', [])
+                    if decision == 'deny':
+                        flash(f'File DENIED - {"; ".join(reasons)}', 'error') 
+                    else:
+                        flash(f'File ALLOWED - {"; ".join(reasons)}', 'success')   
+            except Exception as e:
+                flash(f'Error saving file: {str(e)}', 'error')
+                return redirect(request.url)
     return render_template("SuperAdmin/autodlp.html",
                             decision=result.get('decision') if result else None,
                             reasons=result.get('reasons') if result else None,
-                            filename=file.filename if 'file' in locals() and file.filename else None)
+                            filename=file.filename if 'file' in locals() and file.filename else None,
+                            riskLevel=result.get('riskLevel') if result else None,
+                            savedFilePath=savedFilePath)
 
 
 @app.route('/debug')

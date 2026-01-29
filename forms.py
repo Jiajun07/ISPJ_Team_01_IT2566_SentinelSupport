@@ -1,12 +1,13 @@
 from flask import Flask, render_template, redirect, url_for, flash, session
 from flask_wtf import FlaskForm
-from wtforms import (StringField, TextAreaField, SelectField, SubmitField, DateField, TimeField, PasswordField, FileField,
-                     RadioField, FieldList, FormField)
-from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError, Optional, Regexp
-from flask_wtf.file import FileAllowed
+from wtforms import (StringField, TextAreaField, SelectField, SubmitField, DateField, TimeField, PasswordField,
+                     RadioField, FieldList, FormField, BooleanField, IntegerField)
+from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError, Optional, Regexp, NumberRange
+from flask_wtf.file import FileAllowed, FileField
 from markupsafe import escape
 from datetime import datetime, timedelta
 import re
+
 
 
 def password_complexity_check(form, field):
@@ -34,7 +35,6 @@ class Loginform(FlaskForm):
 
 #cleanup usernames
 class SignUpForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired(), Length(max=64)])
     email = StringField('Email', validators=[DataRequired(), Email()])
     password = PasswordField('Password', validators=[DataRequired(), Length(max=64), password_complexity_check])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
@@ -50,3 +50,63 @@ class ResetPasswordForm(FlaskForm):
     password = PasswordField('Password', validators=[DataRequired(), Length(max=64), password_complexity_check])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     submit = SubmitField('Reset Password')
+
+
+class TenantDeactivateForm(FlaskForm):
+    # Compliance confirmation (required)
+    compliance_confirm = BooleanField(
+        'Confirm compliance data export',
+        validators=[DataRequired(message="You must confirm data export")]
+    )
+
+    # Retention period
+    retention_days = RadioField(
+        'Retention after deactivation',
+        choices=[
+            ('30', '30 days (Recommended)'),
+            ('60', '60 days'),
+            ('90', '90 days')
+        ],
+        default='30',
+        validators=[DataRequired()]
+    )
+
+    # Submit button
+    submit = SubmitField('Confirm Deactivation')
+
+
+class BackupRecoveryForm(FlaskForm):
+    # Schedule Backup
+    backup_frequency = SelectField(
+        'Frequency',
+        choices=[('daily', 'Daily'), ('weekly', 'Weekly'), ('monthly', 'Monthly')],
+        default='daily',
+        validators=[DataRequired()]
+    )
+    backup_time = StringField('Time (HH:MM)', validators=[DataRequired()])
+    enable_scheduled = BooleanField('Enable scheduled backups')
+
+    # Backup Scope
+    scope_full = BooleanField('Full tenant data')
+    scope_compliance = BooleanField('Compliance metadata only')
+
+    retention_days = IntegerField(
+        'Retention (days)',
+        default=30,
+        validators=[NumberRange(min=1, max=365)]
+    )
+
+    # Restore Options
+    restore_step = RadioField(
+        'Step',
+        choices=[('choose', 'Choose backup'), ('full_restore', 'Full restore'), ('partial_restore', 'Partial restore')],
+        default='choose'
+    )
+    backup_file = FileField(
+        'Select backup file',
+        validators=[FileAllowed(['sql', 'json', 'zip'], 'Backup files only')]
+    )
+
+    # Submit buttons
+    backup_submit = SubmitField('Confirm Backup')
+    restore_submit = SubmitField('Start Restore')
