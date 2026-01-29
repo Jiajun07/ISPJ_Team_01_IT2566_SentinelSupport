@@ -1,0 +1,525 @@
+{% extends "base.html" %}
+{% block content %}
+
+<script>
+    document.body.classList.add("myfiles-body");
+</script>
+
+<div class="myfiles-shell">
+    <aside class="side-rail">
+        <!-- Account Switcher -->
+        <div style="padding: 1rem; border-bottom: 1px solid #e0e0e0; margin-bottom: 1rem;">
+            <div style="font-size: 0.75rem; color: #666; margin-bottom: 0.5rem;">Current Account:</div>
+            <div style="font-weight: 600; margin-bottom: 0.5rem;">{{ account_name }}</div>
+            <select id="account-switcher" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">
+                <option value="1" {% if tenant_id == '1' %}selected{% endif %}>Acme Corp</option>
+                <option value="2" {% if tenant_id == '2' %}selected{% endif %}>Tech Solutions</option>
+            </select>
+        </div>
+
+        <button type="button" class="upload-btn" id="upload-trigger">Upload File</button>
+
+        <nav class="rail-nav">
+            <button class="rail-link" type="button" onclick="window.location.href='/myfiles?tenant={{ tenant_id }}'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                </svg>
+                My files
+            </button>
+            <button class="rail-link active" type="button" onclick="window.location.href='/shared-with-me?tenant={{ tenant_id }}'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
+                </svg>
+                Shared with me
+            </button>
+            <button class="rail-link" type="button">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                Recent
+            </button>
+            <button class="rail-link" type="button">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                </svg>
+                Bin
+            </button>
+        </nav>
+    </aside>
+
+    <section class="main-stage">
+
+        <div class="workspace">
+            <div class="search-row" style="display: flex; gap: 15px; align-items: center;">
+                <div class="search-bar" style="flex: 1; max-width: 45%;">
+                    <svg viewBox="0 0 24 24" class="search-icon" aria-hidden="true">
+                        <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+                        <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" stroke-width="2" />
+                    </svg>
+                    <input id="file-search" type="search" placeholder="Search files" aria-label="Search files">
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+                    <input type="text" id="share-link-input" placeholder="Receive File from Link <paste link then enter>" 
+                           style="padding: 10px 15px; border: 1px solid #ccc; border-radius: 6px; flex: 1; font-size: 14px;">
+                    <button id="load-share-btn" style="padding: 10px 20px; background: #4a90e2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; white-space: nowrap;">Load</button>
+                </div>
+            </div>
+
+            <div class="table-card">
+                <div class="table-head">
+                    <div class="col name">Name</div>
+                    <div class="col">Sensitivity</div>
+                    <div class="col">Shared by</div>
+                    <div class="col">Date Shared</div>
+                    <div class="col">Modified Date</div>
+                    <div class="col actions"></div>
+                </div>
+                <div id="file-list" class="table-body">
+                    <div class="empty-state">No shared files yet.</div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- Password Modal -->
+<div id="password-modal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 450px; padding: 40px; border-radius: 12px;">
+        <p id="password-message" style="margin-bottom: 25px; font-size: 16px; color: #333; line-height: 1.5;">
+            You have receive <span id="password-filename" style="font-weight: 600;"></span> from <span id="password-sender" style="font-weight: 600;"></span>
+        </p>
+        
+        <div style="margin-bottom: 28px;">
+            <input type="password" id="password-input" placeholder="Key in password" 
+                   style="width: 100%; padding: 14px 15px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 14px; background-color: #f9f9f9; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+        </div>
+        
+        <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;">
+            <button id="password-cancel-btn" style="padding: 10px 24px; background: white; border: 1px solid #d0d0d0; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; color: #333; transition: all 0.2s;">Cancel</button>
+            <button id="password-accept-btn" style="padding: 10px 28px; background: #4a90e2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; transition: all 0.2s;">Accept</button>
+        </div>
+    </div>
+</div>
+
+<div id="file-menu" class="file-menu" style="display: none;">
+    <button class="menu-item" data-action="download">
+        <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+        </svg>
+        Download
+    </button>
+    <button class="menu-item" data-action="rename">
+        <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        </svg>
+        Rename
+    </button>
+</div>
+
+<style>
+.modal {
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.2s ease-in;
+}
+
+.modal-content {
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+#password-cancel-btn:hover {
+    background-color: #f5f5f5;
+    border-color: #999;
+}
+
+#password-accept-btn:hover {
+    background-color: #3d7bc4;
+}
+</style>
+
+<script>
+    const existingFiles = {{ files | tojson | safe }};
+    const fileVersions = {};
+    const currentTenant = "{{ tenant_id }}";
+    const fileList = document.getElementById("file-list");
+    const searchInput = document.getElementById("file-search");
+    const accountSwitcher = document.getElementById("account-switcher");
+
+    // Account switcher
+    accountSwitcher.addEventListener("change", (e) => {
+        window.location.href = `/shared-with-me?tenant=${e.target.value}`;
+    });
+
+    const formatSize = (bytes = 0) => {
+        if (!bytes) return "-";
+        const units = ["B", "KB", "MB", "GB"];
+        const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+        const size = bytes / Math.pow(1024, power);
+        return `${size.toFixed(1)} ${units[power]}`;
+    };
+
+    const addFileRow = (file) => {
+        const row = document.createElement("div");
+        row.className = "table-row";
+
+        const owner = file.owner || "Unknown";
+        const modified = file.modified || "-";
+        const sensitivity = file.sensitivity || "-";
+        const hashText = file.hash ? `SHA256: ${file.hash}` : "Checksum pending";
+        const tenantId = file.owner_tenant_id || currentTenant;
+        const dateShared = file.date_shared || new Date().toISOString().split('T')[0];
+
+        row.dataset.search = `${file.name} ${owner} ${sensitivity}`.toLowerCase();
+        row.dataset.filename = file.name;
+        row.dataset.url = file.url;
+
+        row.innerHTML = `
+            <div class="col name">
+                <a class="file-link" href="/file/${encodeURIComponent(file.name)}?tenant=${tenantId}">${file.name}</a>
+                <div class="file-subtext">${hashText}</div>
+            </div>
+            <div class="col">${sensitivity}</div>
+            <div class="col">${owner}</div>
+            <div class="col">${dateShared}</div>
+            <div class="col">${modified}</div>
+            <div class="col actions" aria-label="Actions">
+                <button class="action-dots" data-filename="${file.name}" data-url="${file.url}">···</button>
+            </div>
+        `;
+
+        fileList.appendChild(row);
+    };
+
+    const applySearch = () => {
+        const term = (searchInput.value || "").toLowerCase();
+        const rows = [...fileList.querySelectorAll(".table-row")];
+        let matches = 0;
+
+        rows.forEach((row) => {
+            const match = row.dataset.search.includes(term);
+            row.style.display = match ? "grid" : "none";
+            if (match) matches += 1;
+        });
+
+        const emptyState = fileList.querySelector(".empty-state");
+        if (!rows.length && !emptyState) {
+            fileList.innerHTML = '<div class="empty-state">No shared files yet.</div>';
+        } else if (rows.length && matches === 0) {
+            if (emptyState) {
+                emptyState.textContent = "No files match your search.";
+                emptyState.style.display = "block";
+            } else {
+                const div = document.createElement("div");
+                div.className = "empty-state";
+                div.textContent = "No files match your search.";
+                fileList.appendChild(div);
+            }
+        } else if (matches > 0 && emptyState) {
+            emptyState.style.display = "none";
+        }
+    };
+
+    // File menu handlers
+    const fileMenu = document.getElementById("file-menu");
+    let currentFileName = null;
+    let currentFileUrl = null;
+
+    const showFileMenu = (event, filename, url) => {
+        currentFileName = filename;
+        currentFileUrl = url;
+        fileMenu.style.display = "block";
+        const x = event.clientX;
+        const y = event.clientY;
+        fileMenu.style.top = `${y + window.scrollY}px`;
+        fileMenu.style.left = `${x + window.scrollX - 150}px`;
+    };
+
+    const hideFileMenu = () => {
+        fileMenu.style.display = "none";
+        currentFileName = null;
+        currentFileUrl = null;
+    };
+
+    document.addEventListener("click", (event) => {
+        if (event.target.closest(".action-dots")) {
+            event.stopPropagation();
+            const btn = event.target.closest(".action-dots");
+            showFileMenu(event, btn.dataset.filename, btn.dataset.url);
+        } else if (!event.target.closest(".file-menu")) {
+            hideFileMenu();
+        }
+    });
+
+    fileList.addEventListener("contextmenu", (event) => {
+        const row = event.target.closest(".table-row");
+        if (!row) return;
+        event.preventDefault();
+        showFileMenu(event, row.dataset.filename, row.dataset.url);
+    });
+
+    fileMenu.addEventListener("click", async (event) => {
+        const menuItem = event.target.closest(".menu-item");
+        if (!menuItem) return;
+
+        const action = menuItem.dataset.action;
+
+        if (action === "download") {
+            window.location.href = currentFileUrl;
+        } else if (action === "rename") {
+            const newName = prompt("Enter new filename:", currentFileName);
+            if (newName && newName !== currentFileName) {
+                try {
+                    const response = await fetch(`/rename?tenant=${currentTenant}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ old_name: currentFileName, new_name: newName })
+                    });
+                    const data = await response.json();
+                    if (response.ok) {
+                        alert(data.message || "File renamed successfully");
+                        location.reload();
+                    } else {
+                        alert(data.error || "Rename failed");
+                    }
+                } catch (err) {
+                    alert("Rename failed");
+                }
+            }
+        }
+
+        hideFileMenu();
+    });
+
+    const renderExistingFiles = () => {
+        if (!existingFiles || !existingFiles.length) {
+            // Show empty state if no files
+            fileList.innerHTML = '<div class="empty-state">No shared files yet.</div>';
+            return;
+        }
+        fileList.innerHTML = "";
+        existingFiles.forEach(addFileRow);
+    };
+
+    renderExistingFiles();
+    applySearch();
+    searchInput.addEventListener("input", applySearch);
+
+    // Handle share link loading
+    const shareLinkInput = document.getElementById("share-link-input");
+    const loadShareBtn = document.getElementById("load-share-btn");
+
+    const loadShareLink = async () => {
+        const shareLink = shareLinkInput.value.trim();
+        if (!shareLink) {
+            alert("Please enter a share link");
+            return;
+        }
+
+        try {
+            // Extract token from URL
+            let shareToken = null;
+            if (shareLink.includes("?share=")) {
+                shareToken = shareLink.split("?share=")[1].split("&")[0];
+            } else if (shareLink.includes("&share=")) {
+                shareToken = shareLink.split("&share=")[1].split("&")[0];
+            } else {
+                // Assume it's just the token
+                shareToken = shareLink;
+            }
+
+            const response = await fetch(`/validate_share_link?share=${encodeURIComponent(shareToken)}&tenant=${currentTenant}`);
+            const data = await response.json();
+
+            if (response.ok && data.file) {
+                // Add the shared file to the list
+                existingFiles.push(data.file);
+                if (data.versions) {
+                    fileVersions[data.file.name] = data.versions;
+                }
+                fileList.innerHTML = "";
+                renderExistingFiles();
+                shareLinkInput.value = "";
+                alert("File loaded successfully!");
+            } else if (response.status === 401 && data.requires_password) {
+                // Show password modal
+                showPasswordModal(shareToken, {
+                    name: shareLink.split('/').pop() || 'File',
+                    owner: 'Unknown'
+                });
+            } else {
+                alert(data.error || "Invalid or expired share link");
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Failed to load share link");
+        }
+    };
+
+    // Password modal functionality
+    const passwordModal = document.getElementById("password-modal");
+    const passwordInput = document.getElementById("password-input");
+    const passwordFilenameEl = document.getElementById("password-filename");
+    const passwordSenderEl = document.getElementById("password-sender");
+    const passwordCancelBtn = document.getElementById("password-cancel-btn");
+    const passwordAcceptBtn = document.getElementById("password-accept-btn");
+    let currentPasswordShareToken = null;
+    let currentPasswordShareData = null;
+
+    const showPasswordModal = (shareToken, file) => {
+        currentPasswordShareToken = shareToken;
+        currentPasswordShareData = file;
+        passwordFilenameEl.textContent = file.name;
+        passwordSenderEl.textContent = file.owner;
+        passwordInput.value = "";
+        passwordModal.style.display = "flex";
+        passwordInput.focus();
+    };
+
+    const hidePasswordModal = () => {
+        passwordModal.style.display = "none";
+        currentPasswordShareToken = null;
+        currentPasswordShareData = null;
+    };
+
+    passwordCancelBtn.addEventListener("click", () => {
+        hidePasswordModal();
+    });
+
+    passwordAcceptBtn.addEventListener("click", async () => {
+        const password = passwordInput.value;
+        
+        if (!password) {
+            alert("Please enter a password");
+            return;
+        }
+
+        try {
+            const response = await fetch('/validate_share_link', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    share: currentPasswordShareToken,
+                    tenant: currentTenant,
+                    password: password
+                })
+            });
+            const data = await response.json();
+
+            if (response.ok && data.file) {
+                // Add the shared file to the list
+                existingFiles.push(data.file);
+                if (data.versions) {
+                    fileVersions[data.file.name] = data.versions;
+                }
+                fileList.innerHTML = "";
+                renderExistingFiles();
+                shareLinkInput.value = "";
+                hidePasswordModal();
+                alert("File loaded successfully!");
+            } else {
+                alert(data.error || "Incorrect password");
+                passwordInput.value = "";
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Failed to verify password");
+        }
+    });
+
+    // Allow Enter key in password input
+    passwordInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+            passwordAcceptBtn.click();
+        }
+    });
+
+    // Close modal when clicking outside
+    passwordModal.addEventListener("click", (e) => {
+        if (e.target === passwordModal) {
+            hidePasswordModal();
+        }
+    });
+
+    // Enhanced loadShareLink to handle password requirement
+    const loadShareLinkWithPassword = async () => {
+        const shareLink = shareLinkInput.value.trim();
+        if (!shareLink) {
+            alert("Please enter a share link");
+            return;
+        }
+
+        try {
+            // Extract token from URL
+            let shareToken = null;
+            if (shareLink.includes("?share=")) {
+                shareToken = shareLink.split("?share=")[1].split("&")[0];
+            } else if (shareLink.includes("&share=")) {
+                shareToken = shareLink.split("&share=")[1].split("&")[0];
+            } else {
+                // Assume it's just the token
+                shareToken = shareLink;
+            }
+
+            const response = await fetch(`/validate_share_link?share=${encodeURIComponent(shareToken)}&tenant=${currentTenant}`);
+            const data = await response.json();
+
+            if (response.status === 401 && data.requires_password) {
+                // Show password modal
+                showPasswordModal(shareToken, {
+                    name: shareLink.split('/').pop() || 'File',
+                    owner: 'Unknown'
+                });
+                return;
+            }
+
+            if (response.ok && data.file) {
+                // Add the shared file to the list
+                existingFiles.push(data.file);
+                if (data.versions) {
+                    fileVersions[data.file.name] = data.versions;
+                }
+                fileList.innerHTML = "";
+                renderExistingFiles();
+                shareLinkInput.value = "";
+                alert("File loaded successfully!");
+            } else {
+                alert(data.error || "Invalid or expired share link");
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Failed to load share link");
+        }
+    };
+
+    loadShareBtn.addEventListener("click", loadShareLinkWithPassword);
+    shareLinkInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+            loadShareLinkWithPassword();
+        }
+    });
+</script>
+{% endblock %}

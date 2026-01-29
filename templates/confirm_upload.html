@@ -60,6 +60,10 @@
                 </div>
 
                 <form class="confirm-form" method="POST">
+                    <input type="hidden" name="tenant" value="{{ request.args.get('tenant', '1') }}">
+                    {% if is_version %}
+                    <input type="hidden" name="original_filename" value="{{ original_filename }}">
+                    {% endif %}
                     <div class="form-grid">
                         <label class="form-field">
                             <span class="field-label">File name</span>

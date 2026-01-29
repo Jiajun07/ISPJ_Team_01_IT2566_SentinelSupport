@@ -7,16 +7,26 @@
 
 <div class="myfiles-shell">
     <aside class="side-rail">
+        <!-- Account Switcher -->
+        <div style="padding: 1rem; border-bottom: 1px solid #e0e0e0; margin-bottom: 1rem;">
+            <div style="font-size: 0.75rem; color: #666; margin-bottom: 0.5rem;">Current Account:</div>
+            <div style="font-weight: 600; margin-bottom: 0.5rem;">{{ account_name }}</div>
+            <select id="account-switcher" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">
+                <option value="1" {% if tenant_id == '1' %}selected{% endif %}>Acme Corp</option>
+                <option value="2" {% if tenant_id == '2' %}selected{% endif %}>Tech Solutions</option>
+            </select>
+        </div>
+        
         <button type="button" class="upload-btn" id="upload-trigger">Upload File</button>
 
         <nav class="rail-nav">
-            <button class="rail-link active" type="button">
+            <button class="rail-link active" type="button" onclick="window.location.href='/myfiles?tenant={{ tenant_id }}'">
                 <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
                 </svg>
                 My files
             </button>
-            <button class="rail-link" type="button">
+            <button class="rail-link" type="button" onclick="window.location.href='/shared-with-me?tenant={{ tenant_id }}'">
                 <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
                     <circle cx="9" cy="7" r="4"/>
@@ -57,13 +67,18 @@
     <section class="main-stage">
 
         <div class="workspace">
-            <div class="search-row">
-                <div class="search-bar">
+            <div class="search-row" style="display: flex; gap: 15px; align-items: center;">
+                <div class="search-bar" style="flex: 1; max-width: 45%;">
                     <svg viewBox="0 0 24 24" class="search-icon" aria-hidden="true">
                         <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
                         <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" stroke-width="2" />
                     </svg>
                     <input id="file-search" type="search" placeholder="Search files" aria-label="Search files">
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+                    <input type="text" id="share-link-input" placeholder="Receive File from Link <paste link then enter>" 
+                           style="padding: 10px 15px; border: 1px solid #ccc; border-radius: 6px; flex: 1; font-size: 14px;">
+                    <button id="load-share-btn" style="padding: 10px 20px; background: #4a90e2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; white-space: nowrap;">Load</button>
                 </div>
             </div>
 
@@ -127,15 +142,109 @@
     </button>
 </div>
 
+<!-- Toast Notification -->
+<div id="toast-notification" style="position: fixed; bottom: 20px; right: 20px; background-color: #4caf50; color: white; padding: 16px 24px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); z-index: 10000; display: none; animation: slideIn 0.3s ease-in; font-weight: 500;">
+    Link copied successfully!
+</div>
+
+<!-- Share Modal -->
+<div id="share-modal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 500px; padding: 30px; border-radius: 12px;">
+        <h2 id="share-modal-title" style="margin-bottom: 25px; font-size: 18px; font-weight: 600; color: #222;">Send the link for <span id="share-filename" style="font-weight: 700;"></span></h2>
+        
+        <div style="margin-bottom: 18px;">
+            <input type="email" id="share-email-input" placeholder="Add people to share file to" 
+                   style="width: 100%; padding: 14px 15px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 14px; background-color: #f9f9f9; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+        </div>
+        
+        <div style="margin-bottom: 28px;">
+            <input type="password" id="share-password-input" placeholder="Set password (optional)" 
+                   style="width: 100%; padding: 14px 15px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 14px; background-color: #f9f9f9; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+        </div>
+        
+        <div style="display: flex; justify-content: flex-start; align-items: center; gap: 15px;">
+            <button id="copy-link-btn" style="display: flex; align-items: center; gap: 8px; padding: 10px 18px; background: white; border: 1px solid #d0d0d0; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; color: #333; transition: all 0.2s;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 18px; height: 18px;">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                Copy link
+            </button>
+            <div style="display: flex; gap: 12px; margin-left: auto;">
+                <button id="cancel-share-btn" style="padding: 10px 24px; background: white; border: 1px solid #d0d0d0; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; color: #333; transition: all 0.2s;">Cancel</button>
+                <button id="send-share-btn" style="padding: 10px 28px; background: #4a90e2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; transition: all 0.2s;">Send</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.modal {
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.2s ease-in;
+}
+
+.modal-content {
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+#copy-link-btn:hover, #cancel-share-btn:hover {
+    background-color: #f5f5f5;
+    border-color: #999;
+}
+
+#send-share-btn:hover {
+    background-color: #3d7bc4;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+</style>
+
 <script>
     const allowedExtensions = ["pdf", "doc", "docx", "png", "jpg", "jpeg", "txt"];
     const existingFiles = {{ files | tojson | safe }};
+    const currentTenant = "{{ tenant_id }}";
     const form = document.getElementById("upload-form");
     const uploadTrigger = document.getElementById("upload-trigger");
     const fileInput = document.getElementById("file-input");
     const messageEl = document.getElementById("message");
     const fileList = document.getElementById("file-list");
     const searchInput = document.getElementById("file-search");
+    const accountSwitcher = document.getElementById("account-switcher");
+
+    // Account switcher
+    accountSwitcher.addEventListener("change", (e) => {
+        window.location.href = `/myfiles?tenant=${e.target.value}`;
+    });
 
     const formatSize = (bytes = 0) => {
         if (!bytes) return "-";
@@ -171,7 +280,7 @@
 
         row.innerHTML = `
             <div class="col name">
-                <a class="file-link" href="/file/${encodeURIComponent(file.name)}">${file.name}</a>
+                <a class="file-link" href="/file/${encodeURIComponent(file.name)}?tenant=${currentTenant}">${file.name}</a>
                 <div class="file-subtext">${hashText}</div>
             </div>
             <div class="col">${sensitivity}</div>
@@ -205,7 +314,7 @@
         formData.append("file", file);
 
         try {
-            const response = await fetch("/upload/temp", { method: "POST", body: formData });
+            const response = await fetch(`/upload/temp?tenant=${currentTenant}`, { method: "POST", body: formData });
             const data = await response.json();
 
             if (!response.ok || data.error) {
@@ -359,7 +468,7 @@
             const newName = prompt("Enter new filename:", currentFileName);
             if (newName && newName !== currentFileName) {
                 try {
-                    const response = await fetch("/rename", {
+                    const response = await fetch(`/rename?tenant=${currentTenant}`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ old_name: currentFileName, new_name: newName })
@@ -376,28 +485,12 @@
                 }
             }
         } else if (action === "share") {
-            const email = prompt("Enter email address to share with:");
-            if (email) {
-                try {
-                    const response = await fetch("/share", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ filename: currentFileName, email: email })
-                    });
-                    const data = await response.json();
-                    if (response.ok) {
-                        showMessage(data.message || "File shared successfully", "success");
-                    } else {
-                        showMessage(data.error || "Share failed", "error");
-                    }
-                } catch (err) {
-                    showMessage("Share failed", "error");
-                }
-            }
+            // Show share modal
+            showShareModal(currentFileName);
         } else if (action === "delete") {
             if (confirm(`Are you sure you want to delete "${currentFileName}"?`)) {
                 try {
-                    const response = await fetch("/delete", {
+                    const response = await fetch(`/delete?tenant=${currentTenant}`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ filename: currentFileName })
@@ -428,5 +521,177 @@
     renderExistingFiles();
     applySearch();
     searchInput.addEventListener("input", applySearch);
+
+    // Handle share link loading
+    const shareLinkInput = document.getElementById("share-link-input");
+    const loadShareBtn = document.getElementById("load-share-btn");
+
+    const loadShareLink = async () => {
+        const shareLink = shareLinkInput.value.trim();
+        if (!shareLink) {
+            showMessage("Please enter a share link", "error");
+            return;
+        }
+
+        try {
+            // Extract token from URL
+            let shareToken = null;
+            if (shareLink.includes("?share=")) {
+                shareToken = shareLink.split("?share=")[1].split("&")[0];
+            } else if (shareLink.includes("&share=")) {
+                shareToken = shareLink.split("&share=")[1].split("&")[0];
+            } else {
+                // Assume it's just the token
+                shareToken = shareLink;
+            }
+
+            const response = await fetch(`/validate_share_link?share=${encodeURIComponent(shareToken)}&tenant=${currentTenant}`);
+            const data = await response.json();
+
+            if (response.ok && data.file) {
+                // Add the shared file to the list
+                existingFiles.push(data.file);
+                fileList.innerHTML = "";
+                renderExistingFiles();
+                shareLinkInput.value = "";
+                showMessage("File loaded successfully!", "success");
+            } else {
+                showMessage(data.error || "Invalid or expired share link", "error");
+            }
+        } catch (err) {
+            console.error(err);
+            showMessage("Failed to load share link", "error");
+        }
+    };
+
+    loadShareBtn.addEventListener("click", loadShareLink);
+    shareLinkInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+            loadShareLink();
+        }
+    });
+
+    // Share modal functionality
+    const shareModal = document.getElementById("share-modal");
+    const shareFilenameEl = document.getElementById("share-filename");
+    const shareEmailInput = document.getElementById("share-email-input");
+    const sharePasswordInput = document.getElementById("share-password-input");
+    const copyLinkBtn = document.getElementById("copy-link-btn");
+    const cancelShareBtn = document.getElementById("cancel-share-btn");
+    const sendShareBtn = document.getElementById("send-share-btn");
+    let currentShareLink = null;
+    let currentShareFilename = null;
+
+    const showShareModal = (filename) => {
+        currentShareFilename = filename;
+        shareFilenameEl.textContent = filename;
+        shareEmailInput.value = "";
+        sharePasswordInput.value = "";
+        currentShareLink = null;
+        shareModal.style.display = "flex";
+        hideFileMenu();
+    };
+
+    const hideShareModal = () => {
+        shareModal.style.display = "none";
+        currentShareLink = null;
+        currentShareFilename = null;
+    };
+
+    const generateShareLink = async () => {
+        try {
+            const response = await fetch('/generate_share_link', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    filename: currentShareFilename,
+                    tenant: currentTenant,
+                    password: sharePasswordInput.value || null
+                })
+            });
+            const data = await response.json();
+            if (response.ok) {
+                currentShareLink = data.share_link;
+                return data.share_link;
+            } else {
+                showMessage(data.error || "Failed to generate share link", "error");
+                return null;
+            }
+        } catch (err) {
+            showMessage("Failed to generate share link", "error");
+            return null;
+        }
+    };
+
+    copyLinkBtn.addEventListener("click", async () => {
+        if (!currentShareLink) {
+            currentShareLink = await generateShareLink();
+        }
+        if (currentShareLink) {
+            navigator.clipboard.writeText(currentShareLink).then(() => {
+                const toast = document.getElementById("toast-notification");
+                toast.style.display = "block";
+                setTimeout(() => {
+                    toast.style.display = "none";
+                }, 3000);
+            }).catch(() => {
+                prompt("Copy this share link:", currentShareLink);
+            });
+        }
+    });
+
+    cancelShareBtn.addEventListener("click", () => {
+        hideShareModal();
+    });
+
+    sendShareBtn.addEventListener("click", async () => {
+        const email = shareEmailInput.value.trim();
+        
+        if (!currentShareLink) {
+            currentShareLink = await generateShareLink();
+        }
+        
+        if (!currentShareLink) return;
+
+        if (email) {
+            // Send email with share link
+            try {
+                const response = await fetch('/send_share_email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        email: email,
+                        share_link: currentShareLink,
+                        filename: currentShareFilename
+                    })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showMessage("Share link sent successfully!", "success");
+                    hideShareModal();
+                } else {
+                    showMessage(data.error || "Failed to send email", "error");
+                }
+            } catch (err) {
+                showMessage("Failed to send email", "error");
+            }
+        } else {
+            // Just copy the link
+            navigator.clipboard.writeText(currentShareLink).then(() => {
+                showMessage("Share link copied to clipboard!", "success");
+                hideShareModal();
+            }).catch(() => {
+                prompt("Copy this share link:", currentShareLink);
+                hideShareModal();
+            });
+        }
+    });
+
+    // Close modal when clicking outside
+    shareModal.addEventListener("click", (e) => {
+        if (e.target === shareModal) {
+            hideShareModal();
+        }
+    });
 </script>
 {% endblock %}
