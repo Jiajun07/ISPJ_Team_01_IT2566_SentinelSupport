@@ -19,6 +19,10 @@ import smtplib
 from datetime import datetime, timedelta
 from database import archive_tenant, get_tenant_stats, Tenant
 import subprocess
+from forms import BackupRecoveryForm
+from werkzeug.utils import secure_filename
+import zipfile
+import shutil
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
@@ -89,7 +93,41 @@ def list_documents():
     rows = session.execute("SELECT id, file_path, classification FROM documents").fetchall()
     return {"documents": [dict(r) for r in rows]}
 
+#Setting Backup and Recovery customization settings
+@app.route('/admin/backup-recovery/<int:tenant_id>', methods=['GET', 'POST'])
+def backup_recovery_page(tenant_id):
+    """Backup & Recovery settings page"""
+    tenant = Tenant.query.get_or_404(tenant_id)
+    stats = get_tenant_stats(tenant_id)
+    form = BackupRecoveryForm()
 
+    last_backup = get_last_backup(tenant_id)  # Your function
+    backups = list_backups(tenant_id)  # Your function
+
+    if form.validate_on_submit():
+        if form.backup_submit.data:
+            # Create backup
+            backup_file = backup_tenant(tenant_id)
+            flash(f"Backup created: {backup_file}", "success")
+
+        elif form.restore_submit.data:
+            # Handle restore
+            if form.backup_file.data:
+                filename = secure_filename(form.backup_file.data.filename)
+                restore_path = f"restores/{filename}"
+                form.backup_file.data.save(restore_path)
+
+                success = restore_backup(tenant_id, restore_path)
+                if success:
+                    flash("Restore completed successfully!", "success")
+                else:
+                    flash("Restore failed", "danger")
+
+    return render_template('admin/backup_recovery.html',
+                           tenant=tenant, stats=stats, form=form,
+                           last_backup=last_backup, backups=backups)
+
+# Deactivation of Tenant
 @app.route('/admin/tenant/<int:tenant_id>/deactivate', methods=['GET', 'POST'])
 def tenant_deactivate_page(tenant_id):
     """Tenant deactivation page with WTForms"""

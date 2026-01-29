@@ -1,9 +1,9 @@
 from flask import Flask, render_template, redirect, url_for, flash, session
 from flask_wtf import FlaskForm
-from wtforms import (StringField, TextAreaField, SelectField, SubmitField, DateField, TimeField, PasswordField, FileField,
-                     RadioField, FieldList, FormField, BooleanField)
-from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError, Optional, Regexp
-from flask_wtf.file import FileAllowed
+from wtforms import (StringField, TextAreaField, SelectField, SubmitField, DateField, TimeField, PasswordField,
+                     RadioField, FieldList, FormField, BooleanField, IntegerField)
+from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError, Optional, Regexp, NumberRange
+from flask_wtf.file import FileAllowed, FileField
 from markupsafe import escape
 from datetime import datetime, timedelta
 import re
@@ -73,3 +73,40 @@ class TenantDeactivateForm(FlaskForm):
 
     # Submit button
     submit = SubmitField('Confirm Deactivation')
+
+
+class BackupRecoveryForm(FlaskForm):
+    # Schedule Backup
+    backup_frequency = SelectField(
+        'Frequency',
+        choices=[('daily', 'Daily'), ('weekly', 'Weekly'), ('monthly', 'Monthly')],
+        default='daily',
+        validators=[DataRequired()]
+    )
+    backup_time = StringField('Time (HH:MM)', validators=[DataRequired()])
+    enable_scheduled = BooleanField('Enable scheduled backups')
+
+    # Backup Scope
+    scope_full = BooleanField('Full tenant data')
+    scope_compliance = BooleanField('Compliance metadata only')
+
+    retention_days = IntegerField(
+        'Retention (days)',
+        default=30,
+        validators=[NumberRange(min=1, max=365)]
+    )
+
+    # Restore Options
+    restore_step = RadioField(
+        'Step',
+        choices=[('choose', 'Choose backup'), ('full_restore', 'Full restore'), ('partial_restore', 'Partial restore')],
+        default='choose'
+    )
+    backup_file = FileField(
+        'Select backup file',
+        validators=[FileAllowed(['sql', 'json', 'zip'], 'Backup files only')]
+    )
+
+    # Submit buttons
+    backup_submit = SubmitField('Confirm Backup')
+    restore_submit = SubmitField('Start Restore')
