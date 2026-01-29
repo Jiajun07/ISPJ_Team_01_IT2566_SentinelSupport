@@ -2,7 +2,7 @@
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, current_app
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
-from database import create_tenant, db, get_tenant_engine, MasterSessionLocal
+from database import create_tenant, db, MasterSessionLocal
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm
@@ -33,7 +33,6 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("front_page.html")
 
-app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here_change_in_production'
 app.config['SQLALCHEMY_DATABASE_URI'] = (
      "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
@@ -43,7 +42,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # # Initialize DB
 # db.init_app(app)
-# s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 
 # Create public.tenants table (run once)
