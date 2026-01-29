@@ -7,6 +7,7 @@ from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired
@@ -27,6 +28,11 @@ import shutil
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+UPLOAD_FOLDER = os.path.join(app.root_path, 'DLPScannerModules', 'testfiles', 'upload')
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 #csrf = CSRFProtect(app)
 
@@ -400,6 +406,7 @@ def policyEngine(file):
 @app.route('/autodlp', methods=['GET', 'POST'])
 def autodlp():
     result = None 
+    savedFilePath = None
     if request.method == 'POST':      
         if 'file' not in request.files:
             flash('No file part', 'error')
@@ -408,23 +415,37 @@ def autodlp():
         if file.filename == '':
             flash('No selected file', 'error')
             return redirect(request.url)
-        
-        result = policyEngine(file)
-        if 'status' in result and result['status'] == 'error':
-            flash(result['message'], 'error')
-            return redirect(request.url)
-        else:
-            decision = result.get('decision')
-            reasons = result.get('reasons', [])
-            if decision == 'deny':
-                flash(f'File DENIED - {"; ".join(reasons)}', 'error') 
-            else:
-                flash(f'File ALLOWED - {"; ".join(reasons)}', 'success')   
+        if file and file.filename:
+            filename = secure_filename(file.filename)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            uniqueFilename = f"{timestamp}_{filename}"
+            filePath = os.path.join(current_app.config['UPLOAD_FOLDER'], uniqueFilename)
+            
+            try:
+                file.save(filePath)
+                savedFilePath = filePath
+                flash(f'File uploaded successfully: {uniqueFilename}', 'success')
+                file.seek(0)
+                result = policyEngine(file)
+                if 'status' in result and result['status'] == 'error':
+                    flash(result['message'], 'error')
+                    return redirect(request.url)
+                else:
+                    decision = result.get('decision')
+                    reasons = result.get('reasons', [])
+                    if decision == 'deny':
+                        flash(f'File DENIED - {"; ".join(reasons)}', 'error') 
+                    else:
+                        flash(f'File ALLOWED - {"; ".join(reasons)}', 'success')   
+            except Exception as e:
+                flash(f'Error saving file: {str(e)}', 'error')
+                return redirect(request.url)
     return render_template("SuperAdmin/autodlp.html",
                             decision=result.get('decision') if result else None,
                             reasons=result.get('reasons') if result else None,
                             filename=file.filename if 'file' in locals() and file.filename else None,
-                            riskLevel=result.get('riskLevel') if result else None)
+                            riskLevel=result.get('riskLevel') if result else None,
+                            savedFilePath=savedFilePath)
 
 
 @app.route('/debug')
