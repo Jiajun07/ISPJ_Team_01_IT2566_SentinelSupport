@@ -1,6 +1,7 @@
 # database.py - SUPABASE MULTI-TENANT
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 import bcrypt
 
