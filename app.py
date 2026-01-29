@@ -33,26 +33,22 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("front_page.html")
 
-<<<<<<< HEAD
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here_change_in_production'
-app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://postgres:Jiajun07@@2025@localhost:5432/sdsm_master"
-=======
 app.config['SQLALCHEMY_DATABASE_URI'] = (
-    "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
-    "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
-)
->>>>>>> 6313fdf51b376444124eca0b825272c089fd08bf
+     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
+     "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
+ )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Initialize DB
-db.init_app(app)
-s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+# # Initialize DB
+# db.init_app(app)
+# s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 
 # Create public.tenants table (run once)
-with app.app_context():
-    db.create_all()  # creates Tenant model table
+# with app.app_context():
+#     db.create_all()  # creates Tenant model table
 
 
 # 🔑 TENANT CONTEXT (SCHEMA SWITCHING) - CRITICAL FIX

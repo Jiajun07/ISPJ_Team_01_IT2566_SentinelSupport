@@ -8,8 +8,6 @@ MASTER_DB_URL = (
     "postgresql://postgres:Jiajun07@@2025@localhost:5432/sdsm_master"
 )
 
-MASTER_DSN = "dbname=sdsm_master user=postgres password=Jiajun07@@2025 host=localhost port=5432"
-SUPER_DSN  = "dbname=postgres    user=postgres password=Jiajun07@@2025 host=localhost port=5432"
 
 
 # database.py
