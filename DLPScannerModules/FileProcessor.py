@@ -4,9 +4,6 @@ import json
 from io import StringIO
 from typing import List, Dict, Optional, Set
 from werkzeug.datastructures import FileStorage
-from docx import Document
-from pptx import Presentation
-from pandas import read_excel
 from DLPScannerModules.OCRProcessor import performOCRandScan
 
 try:

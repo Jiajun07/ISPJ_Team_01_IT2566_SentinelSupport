@@ -1,0 +1,7 @@
+Hello, my name is John Doe.
+My email is john.doe@example.com
+My credit card number is 4532-1488-0343-6467
+My phone number is 555-123-4567
+My IP address is 192.168.1.1
+My Singapore ID is S1234567D
+I have a secret password and confidential information.

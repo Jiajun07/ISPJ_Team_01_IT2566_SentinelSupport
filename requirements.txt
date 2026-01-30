@@ -17,6 +17,9 @@ When adding any new platform of implementations, Add to this page
 16. pip install pytessaract
 17. pip install pillow
 18. pip install opencv-python
+19. pip install email-validator
+20. pip install python-dotenv
+
 py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2, flask_wtf, wtforms, itsdangerous, python-docx, pypdf, python-pptx, pandas, en-core-web-sm, presidio-anonymizer, spacy, presidio-analyzer pytessaract pillow opencv-python
 
 

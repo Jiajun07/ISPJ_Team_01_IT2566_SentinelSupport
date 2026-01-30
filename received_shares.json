@@ -1,0 +1,14 @@
+{
+  "tenant_1": [
+    {
+      "name": "Assignment1 25S2 (1).docx",
+      "size": 77365,
+      "modified": "2026-01-28 22:16:20",
+      "owner": "Jane Smith",
+      "sensitivity": "Shared",
+      "url": "/download/Assignment1 25S2 (1).docx?tenant=2",
+      "share_token": "Kv953DGFLJa1CJiuNLMI5PIbygqz_rV4l0i3C9sE-8E",
+      "owner_tenant_id": "2"
+    }
+  ]
+}
