@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block content %}
+
+<body>
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-messages">
+            {% for category, message in messages %}
+            <div
+                class="flash-message flash-{{ 'success' if category == 'success' else 'error' if category == 'error' else 'info' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="dlp-section">
+            <h1 class="section-title">Auto DLP</h1>
+            <div class="auto-dlp-container">
+                <div class="progress-circle">
+                    <svg class="progress-ring" viewBox="0 0 150 150">
+                        <circle class="progress-ring-bg" cx="75" cy="75" r="70"></circle>
+                        <circle class="progress-ring-fill" cx="75" cy="75" r="70"
+                            style="stroke-dashoffset: {{ 440 - (upload_progress|default(100) * 440 / 100) }};">
+                        </circle>
+                    </svg>
+                    <div class="progress-text">Uploads</div>
+                </div>
+                <div class="progress-circle">
+                    <svg class="progress-ring" viewBox="0 0 150 150">
+                        <circle class="progress-ring-bg" cx="75" cy="75" r="70"></circle>
+                        <circle class="progress-ring-fill" cx="75" cy="75" r="70"
+                            style="stroke-dashoffset: {{ 440 - (export_share_progress|default(100) * 440 / 100) }};"></circle>
+                    </svg>
+                    <div class="progress-text">Exports/Share</div>
+                </div>
+            </div>
+            <div class="scanning-status">
+                <span>Currently Scanning:</span>
+                <a href="#" class="view-settings">View current settings</a>
+            </div>
+        </div>
+
+
+        <div class="dlp-section">
+            <h2 class="manual-section-title">Upload File</h2>
+            <form method="POST" enctype="multipart/form-data" id="scanForm">
+                <div class="upload-container">
+                    <label for="fileInput" class="upload-btn">
+                        <span>Upload File</span>
+                    </label>
+                    <input type="file" name="file" id="fileInput" class="file-input"
+                        accept=".txt,.csv,.pdf,.docx,.json,.xml,.html,.xlsx,.pptx,.sql,.db,.jpg,.jpeg,.png,.gif" onchange="updateFileName()">
+                </div>
+                <button type="submit" class="scan-btn">Scan</button>
+            </form>
+
+
+            {% if scan_result %}
+            <div class="scan-results">
+                <h3>Scan Results for "{{ filename }}"</h3>
+                <div class="scan-results-content">
+                    <div class="decision-box {{ 'denied' if scan_result.decision == 'DENIED' else 'accepted' }}">
+                        <h4>{{ scan_result.decision }}</h4>
+                        <p>Risk Level: {{ scan_result.riskLevel }}</p>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        function updateFileName() {
+            const fileInput = document.getElementById('fileInput');
+            const uploadBtn = document.querySelector('.upload-btn span:last-child');
+
+            if (fileInput.files.length > 0) {
+                const fileName = fileInput.files[0].name;
+                uploadBtn.textContent = fileName.length > 20 ? fileName.substring(0, 20) + '...' : fileName;
+            } else {
+                uploadBtn.textContent = 'Upload Database';
+            }
+        }
+
+        setTimeout(() => {
+            const flashMessages = document.querySelectorAll('.flash-message');
+            flashMessages.forEach(msg => {
+                msg.style.opacity = '0';
+                msg.style.transform = 'translateY(-10px)';
+                setTimeout(() => msg.remove(), 300);
+            });
+        }, 5000);
+    </script>
+</body>
+<style>
+    .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 30px;
+    }
+
+    .dlp-section {
+        background: white;
+        border-radius: 15px;
+        padding: 30px;
+        margin-bottom: 30px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    }
+
+    .section-title {
+        font-size: 28px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 30px;
+    }
+
+    .auto-dlp-container {
+        display: flex;
+        justify-content: center;
+        gap: 80px;
+        margin-bottom: 40px;
+    }
+
+    .progress-circle {
+        position: relative;
+        width: 150px;
+        height: 150px;
+    }
+
+    .progress-ring {
+        transform: rotate(-90deg);
+        width: 100%;
+        height: 100%;
+    }
+
+    .progress-ring-bg {
+        fill: none;
+        stroke: #e6e6e6;
+        stroke-width: 8;
+    }
+
+    .progress-ring-fill {
+        fill: none;
+        stroke: #4ade80;
+        stroke-width: 8;
+        stroke-linecap: round;
+        stroke-dasharray: 440;
+        stroke-dashoffset: 0;
+        transition: stroke-dashoffset 0.5s ease-in-out;
+    }
+
+    .progress-text {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 16px;
+        font-weight: 600;
+        color: #333;
+    }
+
+    .scanning-status {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        font-size: 16px;
+        color: #666;
+    }
+
+    .view-settings {
+        color: #3b82f6;
+        text-decoration: none;
+        font-weight: 500;
+    }
+
+    .view-settings:hover {
+        text-decoration: underline;
+    }
+
+    .manual-section-title {
+        font-size: 24px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 15px;
+    }
+
+    .last-scan {
+        font-size: 16px;
+        color: #666;
+        margin-bottom: 30px;
+    }
+
+    .upload-container {
+        display: flex;
+        gap: 20px;
+        align-items: center;
+        margin-bottom: 30px;
+    }
+
+    .upload-btn {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 15px 25px;
+        border: 2px solid #d1d5db;
+        background: white;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 16px;
+        color: #374151;
+        transition: all 0.3s ease;
+    }
+
+    .upload-btn:hover {
+        border-color: #3b82f6;
+        color: #3b82f6;
+    }
+
+    .upload-icon {
+        font-size: 20px;
+    }
+
+    .scan-btn {
+        background: #3b82f6;
+        color: white;
+        border: none;
+        padding: 15px 40px;
+        border-radius: 10px;
+        font-size: 18px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.3s ease;
+        width: 200px;
+    }
+
+    .scan-btn:hover {
+        background: #2563eb;
+    }
+
+    .scan-btn:active {
+        transform: translateY(1px);
+    }
+
+    .file-input {
+        display: none;
+    }
+
+    .flash-messages {
+        margin-bottom: 20px;
+    }
+
+    .flash-message {
+        padding: 12px 20px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        font-weight: 500;
+    }
+
+    .flash-success {
+        background: #dcfce7;
+        color: #166534;
+        border: 1px solid #bbf7d0;
+    }
+
+    .flash-error {
+        background: #fef2f2;
+        color: #dc2626;
+        border: 1px solid #fecaca;
+    }
+
+    .flash-info {
+        background: #eff6ff;
+        color: #1d4ed8;
+        border: 1px solid #dbeafe;
+    }
+
+    .scan-results {
+        margin-top: 30px;
+        padding: 20px;
+        background: #f8fafc;
+        border-radius: 10px;
+    }
+
+    .scan-results-content {
+        margin-top: 15px;
+    }
+
+    .decision-box {
+        padding: 15px;
+        border-radius: 8px;
+    }
+
+    .decision-box.denied {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+    }
+
+    .decision-box.accepted {
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+    }
+
+    .decision-box.denied h4 {
+        color: #dc2626;
+    }
+
+    .decision-box.accepted h4 {
+        color: #16a34a;
+    }
+</style>
+
+{% endblock %}

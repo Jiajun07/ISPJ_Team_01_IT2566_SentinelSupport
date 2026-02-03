@@ -1,0 +1,17 @@
+Email Verification
+
+Hello,
+
+Please verify your email address by clicking the link below:
+
+{{ verify_url }}
+
+Your Signup Code: {{ signup_code }}
+
+This link will expire in 1 hour.
+
+If you didn't create an account, you can safely ignore this email.
+
+Best regards,
+SentinelSupport Team
+

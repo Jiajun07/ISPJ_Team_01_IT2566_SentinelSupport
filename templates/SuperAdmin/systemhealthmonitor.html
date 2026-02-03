@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Health Monitor - SentinelSupport</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo {
+            width: 50px;
+            height: 50px;
+            background: white;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: #667eea;
+            font-size: 20px;
+        }
+
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 2px solid white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        .page-title {
+            font-size: 28px;
+            font-weight: 600;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .status-section {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: center;
+            gap: 60px;
+            margin-bottom: 40px;
+        }
+
+        .status-row.top {
+            grid-column: 1 / -1;
+        }
+
+        .progress-circle {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .circle-container {
+            position: relative;
+            width: 120px;
+            height: 120px;
+        }
+
+        .progress-ring {
+            transform: rotate(-90deg);
+            width: 100%;
+            height: 100%;
+        }
+
+        .progress-ring-bg {
+            fill: none;
+            stroke: #e6e6e6;
+            stroke-width: 8;
+        }
+
+        .progress-ring-fill {
+            fill: none;
+            stroke: #4ade80;
+            stroke-width: 8;
+            stroke-linecap: round;
+            stroke-dasharray: 350;
+            stroke-dashoffset: 0;
+            transition: stroke-dashoffset 0.5s ease-in-out;
+        }
+
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            text-align: center;
+        }
+
+        .status-label {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            text-align: center;
+        }
+
+        .metrics-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .metrics-section {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .section-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .metrics-grid {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .metric-item {
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.3;
+        }
+
+        .table-section {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .data-table th {
+            background: #f8fafc;
+            padding: 12px 16px;
+            text-align: left;
+            font-weight: 600;
+            color: #374151;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .data-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e5e7eb;
+            color: #374151;
+        }
+
+        .data-table tbody tr:hover {
+            background: #f9fafb;
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-running {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .export-button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            float: right;
+            margin-top: 20px;
+            transition: background 0.3s ease;
+        }
+
+        .export-button:hover {
+            background: #2563eb;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        .two-column-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="logo-container">
+            <div class="logo">🛡️</div>
+        </div>
+        <div class="user-profile">
+            <div class="user-avatar">👤</div>
+            <span>{{ session.get('username', 'Neon Tan') }}</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <h1 class="page-title">System Health Status</h1>
+
+        <!-- Top Status Row -->
+        <div class="status-section full-width">
+            <div class="status-row">
+                <!-- System Status -->
+                <div class="progress-circle">
+                    <div class="circle-container">
+                        <svg class="progress-ring" viewBox="0 0 120 120">
+                            <circle class="progress-ring-bg" cx="60" cy="60" r="55"></circle>
+                            <circle class="progress-ring-fill" cx="60" cy="60" r="55" 
+                                    style="stroke-dashoffset: {{ 350 - (system_status|default(100) * 350 / 100) }};"></circle>
+                        </svg>
+                        <div class="progress-text">Healthy</div>
+                    </div>
+                    <div class="status-label">System Status</div>
+                </div>
+
+                <!-- Web Server -->
+                <div class="progress-circle">
+                    <div class="circle-container">
+                        <svg class="progress-ring" viewBox="0 0 120 120">
+                            <circle class="progress-ring-bg" cx="60" cy="60" r="55"></circle>
+                            <circle class="progress-ring-fill" cx="60" cy="60" r="55" 
+                                    style="stroke-dashoffset: {{ 350 - (web_server_status|default(100) * 350 / 100) }};"></circle>
+                        </svg>
+                        <div class="progress-text">Healthy</div>
+                    </div>
+                    <div class="status-label">Web Server</div>
+                </div>
+
+                <!-- Database Status -->
+                <div class="progress-circle">
+                    <div class="circle-container">
+                        <svg class="progress-ring" viewBox="0 0 120 120">
+                            <circle class="progress-ring-bg" cx="60" cy="60" r="55"></circle>
+                            <circle class="progress-ring-fill" cx="60" cy="60" r="55" 
+                                    style="stroke-dashoffset: {{ 350 - (database_status|default(85) * 350 / 100) }};"></circle>
+                        </svg>
+                        <div class="progress-text">Running</div>
+                    </div>
+                    <div class="status-label">Database Status</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Metrics Grid -->
+        <div class="metrics-container">
+            <!-- Database Status -->
+            <div class="metrics-section">
+                <h2 class="section-title">Database Status</h2>
+                <div class="two-column-grid">
+                    <div class="progress-circle">
+                        <div class="circle-container">
+                            <svg class="progress-ring" viewBox="0 0 120 120">
+                                <circle class="progress-ring-bg" cx="60" cy="60" r="55"></circle>
+                                <circle class="progress-ring-fill" cx="60" cy="60" r="55" 
+                                        style="stroke-dashoffset: {{ 350 - (database_health|default(90) * 350 / 100) }};"></circle>
+                            </svg>
+                            <div class="progress-text">Running</div>
+                        </div>
+                    </div>
+                    <div class="metrics-grid">
+                        <div class="metric-item">
+                            <div class="metric-value">{{ avg_query_latency|default('5ms') }}</div>
+                            <div class="metric-label">Avg. Query Latency</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-value">{{ active_users|default('67') }}</div>
+                            <div class="metric-label">Active Users</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-value">{{ total_db_size|default('674TB') }}</div>
+                            <div class="metric-label">Total Database Size</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Application Health -->
+            <div class="metrics-section">
+                <h2 class="section-title">Application Health</h2>
+                <div class="two-column-grid">
+                    <div class="progress-circle">
+                        <div class="circle-container">
+                            <svg class="progress-ring" viewBox="0 0 120 120">
+                                <circle class="progress-ring-bg" cx="60" cy="60" r="55"></circle>
+                                <circle class="progress-ring-fill" cx="60" cy="60" r="55" 
+                                        style="stroke-dashoffset: {{ 350 - (app_health|default(95) * 350 / 100) }};"></circle>
+                            </svg>
+                            <div class="progress-text">Healthy</div>
+                        </div>
+                    </div>
+                    <div class="metrics-grid">
+                        <div class="metric-item">
+                            <div class="metric-value">{{ avg_response_time|default('17ms') }}</div>
+                            <div class="metric-label">Avg. Response Time</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-value">{{ api_error_rate|default('0.4%') }}</div>
+                            <div class="metric-label">API Error Rate</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-value">{{ total_requests|default('6776') }}</div>
+                            <div class="metric-label">Total Requests Received</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Audit -->
+        <div class="table-section">
+            <h2 class="section-title">Error Audit</h2>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Error Code</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if error_logs %}
+                        {% for error in error_logs %}
+                        <tr>
+                            <td>{{ error.code }}</td>
+                            <td>{{ error.description }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td>404</td>
+                            <td>Missing endpoint /api/time</td>
+                        </tr>
+                        <tr>
+                            <td>500</td>
+                            <td>Database timeout at 4:46pm</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Tenant Alerts -->
+        <div class="table-section">
+            <h2 class="section-title">Tenant Alerts</h2>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Tenant ID</th>
+                        <th>Status</th>
+                        <th>CPU</th>
+                        <th>Storage</th>
+                        <th>Errors</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if tenant_alerts %}
+                        {% for alert in tenant_alerts %}
+                        <tr>
+                            <td>{{ alert.tenant_id }}</td>
+                            <td><span class="status-badge status-{{ 'running' if alert.status == 'Running' else 'warning' }}">{{ alert.status }}</span></td>
+                            <td>{{ alert.cpu }}%</td>
+                            <td>{{ alert.storage }}%</td>
+                            <td>{{ alert.errors }}%</td>
+                            <td>{{ alert.description }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td>14</td>
+                            <td><span class="status-badge status-running">Running</span></td>
+                            <td>82%</td>
+                            <td>40%</td>
+                            <td>5.4%</td>
+                            <td>Bulk Download detected</td>
+                        </tr>
+                        <tr>
+                            <td>2</td>
+                            <td><span class="status-badge status-warning">Warning</span></td>
+                            <td>65%</td>
+                            <td>95%</td>
+                            <td>13.1%</td>
+                            <td>Suspended Logging at 13:24:54 11-12-2025</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+
+            <button class="export-button" onclick="exportLogs()">Export Logs</button>
+        </div>
+    </div>
+
+    <script>
+        function exportLogs() {
+            // Implement export functionality
+            alert('Exporting logs...');
+        }
+
+        // Auto-refresh data every 30 seconds
+        setInterval(() => {
+            location.reload();
+        }, 30000);
+    </script>
+</body>
+
+</html>
