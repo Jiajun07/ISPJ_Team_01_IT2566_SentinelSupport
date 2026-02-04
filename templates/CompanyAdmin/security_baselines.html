@@ -1,0 +1,71 @@
+{% extends "admin/dashboard.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-lg-8 mx-auto">
+            <div class="card shadow-lg border-0">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="mb-0"><i class="fas fa-shield-alt me-2"></i>Security Baselines</h3>
+                    <p class="mb-0 opacity-75">Configure infosec policies for tenant {{ tenant_id }}</p>
+                </div>
+                <div class="card-body p-5">
+                    <form method="POST">
+                        {{ form.hidden_tag() }}
+
+                        <div class="row g-4 mb-4">
+                            <div class="col-md-6">
+                                <div class="form-check form-switch">
+                                    {{ form.mfa_enabled(class="form-check-input", id="mfa") }}
+                                    <label class="form-check-label fw-semibold" for="mfa">
+                                        <i class="fas fa-mobile-alt me-2 text-success"></i>
+                                        Enable Multi-Factor Authentication
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check form-switch">
+                                    {{ form.dlp_enabled(class="form-check-input", id="dlp") }}
+                                    <label class="form-check-label fw-semibold" for="dlp">
+                                        <i class="fas fa-filter me-2 text-warning"></i>
+                                        Enable Data Loss Prevention
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row g-4 mb-4">
+                            <div class="col-md-6">
+                                {{ form.dlp_rules.label(class="form-label fw-semibold") }}
+                                {{ form.dlp_rules(class="form-control", placeholder="3") }}
+                                <small class="form-text text-muted">Number of DLP classification rules</small>
+                            </div>
+                            <div class="col-md-6">
+                                {{ form.retention_days.label(class="form-label fw-semibold") }}
+                                {{ form.retention_days(class="form-control", placeholder="365") }}
+                                <small class="form-text text-muted">Days before data auto-deletion</small>
+                            </div>
+                        </div>
+
+                        <div class="form-check mb-4">
+                            {{ form.enable_rls(class="form-check-input", id="rls") }}
+                            <label class="form-check-label fw-semibold" for="rls">
+                                <i class="fas fa-lock me-2 text-danger"></i>
+                                Enable Row Level Security (RLS)
+                            </label>
+                            <div class="form-text">
+                                <strong>Recommended:</strong> Prevents cross-user data access within tenant
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-success btn-lg px-5 py-3 fw-bold w-100">
+                            <i class="fas fa-check-circle me-2"></i>
+                            Apply Security Baselines
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

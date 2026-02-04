@@ -7,10 +7,10 @@ from flask import Flask, g, render_template, request, redirect, url_for, send_fr
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
-from database import db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin
+from database import db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin, TenantSecurity, apply_rls_policies
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
-from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm
+from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm, SecurityBaselineForm
 from werkzeug.security import generate_password_hash, check_password_hash
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -93,18 +93,6 @@ def home():
     return render_template("front_page.html")
 
 
-
-# 🔑 TENANT CONTEXT (SCHEMA SWITCHING) - CRITICAL FIX
-@app.before_request
-def set_tenant_context():
-    """Automatically switch to tenant schema based on company/session"""
-    g.schema_name = None
-    company_name = request.headers.get("X-Company-Name") or session.get('company_name')
-    if company_name:
-        schema_name = get_db_name_for_company(company_name)
-        if schema_name:
-            g.schema_name = schema_name
-            g.company_name = company_name
 
 
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads")
@@ -230,16 +218,6 @@ def get_uploaded_files():
                 )
     return files
 
-def get_tenant_session():
-    """Get session with search_path set to tenant schema"""
-    if "tenant_session" not in g:
-        if not g.schema_name:
-            raise RuntimeError("No tenant context - login required")
-
-        session = MasterSessionLocal()
-        session.execute(text(f"SET search_path TO {g.schema_name}, public"))
-        g.tenant_session = session
-    return g.tenant_session
 
 
 #@app.route("/login", methods=["GET", "POST"])
@@ -927,6 +905,17 @@ def download_file(filename):
 
 #TODO JiaJun stuff -------------------------------------------------------------------------
 
+def get_tenant_session():
+    """Get session with search_path set to tenant schema"""
+    if "tenant_session" not in g:
+        if not g.schema_name:
+            raise RuntimeError("No tenant context - login required")
+
+        session = MasterSessionLocal()
+        session.execute(text(f"SET search_path TO {g.schema_name}, public"))
+        g.tenant_session = session
+    return g.tenant_session
+
 @app.before_request
 def set_tenant_context():
     """Safe tenant context loader"""
@@ -1130,6 +1119,33 @@ def backup_tenant(tenant_id: int):
     ]
     subprocess.run(cmd, env={"PGPASSWORD": "Jiajun07@@2025"})
     return backup_file
+
+
+@app.route('/tenant/<int:tenant_id>/security-baselines', methods=['GET', 'POST'])
+def tenant_security_baselines(tenant_id):
+    if session.get('tenant_id') != tenant_id:
+        return redirect(url_for('login'))
+
+    tenant_security = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
+    form = SecurityBaselineForm(obj=tenant_security)
+
+    if form.validate_on_submit():
+        if not tenant_security:
+            tenant_security = TenantSecurity(tenant_id=tenant_id)
+
+        # Update settings
+        form.populate_obj(tenant_security)
+        db.session.add(tenant_security)
+        db.session.commit()
+
+        # ✅ APPLY RLS POLICIES TO TENANT SCHEMA
+        apply_rls_policies(tenant_id, tenant_security)
+
+        flash("✅ Security baselines applied successfully!", "success")
+        return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+
+    return render_template('admin/security_baselines.html', form=form, tenant_id=tenant_id)
+
 
 #TODO tristan stuff -------------------------------------------------------------------------
 @app.route('/login', methods=['GET', 'POST'])

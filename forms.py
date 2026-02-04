@@ -57,6 +57,13 @@ class CompanySignupForm(FlaskForm):
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     submit = SubmitField('Sign Up')
 
+class SecurityBaselineForm(FlaskForm):
+    mfa_enabled = BooleanField('Enable MFA', default=False)
+    dlp_enabled = BooleanField('Enable DLP', default=False)
+    dlp_rules = IntegerField('DLP Rules Count', default=3, validators=[NumberRange(min=0, max=100)])
+    retention_days = IntegerField('Data Retention (days)', default=365, validators=[NumberRange(min=30, max=3650)])
+    enable_rls = BooleanField('Enable RLS (Row Level Security)', default=True)
+    submit = SubmitField('Apply Security Baselines')
 
 class ForgetPasswordForm(FlaskForm):
     email = StringField('Email', validators=[DataRequired(), Email()])
