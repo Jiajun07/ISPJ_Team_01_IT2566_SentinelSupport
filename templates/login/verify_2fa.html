@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% from 'bootstrap5/form.html' import render_form_field %}
+
+{% block title %}Verify 2FA - SentinelSupport{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6 col-lg-4">
+            <div class="card shadow-lg border-0 rounded-4">
+                <div class="card-body p-5">
+                    <!-- Logo -->
+                    <div class="text-center mb-5">
+                        <img src="{{ url_for('static', filename='img/logo.png') }}"
+                             alt="SentinelSupport" class="img-fluid" style="max-height: 60px;">
+                        <h2 class="h3 fw-bold mt-3 mb-1 text-dark">Two-Factor Authentication</h2>
+                        <p class="text-muted">Enter the 6-digit code sent to {{ session.get('temp_user_email', 'your email') }}</p>
+                    </div>
+
+                    <!-- Flash Messages -->
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                        {% if messages %}
+                            {% for category, message in messages %}
+                                <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                                    {{ message }}
+                                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                    {% endwith %}
+
+                    <!-- 2FA Form -->
+                    <form method="POST" action="{{ url_for('verify_2fa') }}">
+                        {{ form.hidden_tag() }}
+
+                        <div class="mb-4">
+                            {{ render_form_field(form.code, class="form-control form-control-lg text-center fw-bold",
+                                              placeholder="000000", maxlength="6") }}
+                            <div class="form-text text-center">
+                                Didn't receive code?
+                                <a href="{{ url_for('resend_2fa') }}" class="text-primary fw-semibold"
+                                   onclick="resendCode(event)">Resend Code</a>
+                            </div>
+                        </div>
+
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary btn-lg py-3 fw-bold">
+                                <i class="fas fa-shield-alt me-2"></i>Verify Code
+                            </button>
+                        </div>
+
+                        <div class="text-center mt-4">
+                            <small class="text-muted">
+                                Code expires in <span id="countdown">10:00</span>
+                            </small>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Back to Login -->
+            <div class="text-center mt-4">
+                <a href="{{ url_for('login') }}" class="text-muted text-decoration-none">
+                    <i class="fas fa-arrow-left me-1"></i>Back to Login
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.card {
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.2);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 16px;
+    transition: all 0.3s ease;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+}
+
+.form-control:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+}
+
+#countdown {
+    font-family: 'Courier New', monospace;
+    color: #dc3545;
+    font-weight: bold;
+}
+</style>
+
+<script>
+let timeLeft = 600; // 10 minutes in seconds
+
+function updateCountdown() {
+    const minutes = Math.floor(timeLeft / 60);
+    const seconds = timeLeft % 60;
+    document.getElementById('countdown').textContent =
+        `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+    if (timeLeft > 0) {
+        timeLeft--;
+    } else {
+        document.getElementById('countdown').textContent = 'Expired';
+    }
+}
+
+setInterval(updateCountdown, 1000);
+updateCountdown();
+
+function resendCode(event) {
+    event.preventDefault();
+    fetch('{{ url_for("resend_2fa") }}', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Code resent successfully!');
+                timeLeft = 600; // Reset timer
+            } else {
+                alert('Error: ' + data.error);
+            }
+        });
+}
+
+// Auto-focus input
+document.addEventListener('DOMContentLoaded', function() {
+    const codeInput = document.querySelector('input[name="code"]');
+    if (codeInput) codeInput.focus();
+
+    // Allow only numbers
+    codeInput.addEventListener('input', function(e) {
+        this.value = this.value.replace(/[^0-9]/g, '').slice(0, 6);
+    });
+
+    // Auto-submit on 6 digits
+    codeInput.addEventListener('input', function(e) {
+        if (this.value.length === 6) {
+            this.form.submit();
+        }
+    });
+});
+</script>
+{% endblock %}

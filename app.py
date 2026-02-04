@@ -7,7 +7,7 @@ from flask import Flask, g, render_template, request, redirect, url_for, send_fr
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
-from database import db, MasterSessionLocal, list_backups, restore_backup, get_last_backup
+from database import db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm
@@ -58,6 +58,7 @@ DUMMY_ACCOUNTS = {
     '1': {'name': 'Acme Corp', 'owner': 'John Doe'},
     '2': {'name': 'Tech Solutions', 'owner': 'Jane Smith'}
 }
+
 
 def get_current_tenant():
     """Get current tenant ID from URL parameter or form data, default to tenant 1"""
@@ -924,6 +925,25 @@ def download_file(filename):
     
     return send_from_directory(tenant_folder, filename, as_attachment=True, download_name=download_name)
 
+#TODO JiaJun stuff -------------------------------------------------------------------------
+
+@app.before_request
+def set_tenant_context():
+    """Safe tenant context loader"""
+    # Skip ALL public routes (home, login, signup, etc.)
+    public_routes = [
+        'index', 'login', 'verify_2fa', 'company_signup', 'signup',
+        'logout', 'verify_signup_email', 'reset_password', 'forget_password'
+    ]
+
+    if not request.endpoint or request.endpoint.split('.')[0] in public_routes:
+        return  # Skip - no crash!
+
+    # Only run for authenticated tenant routes
+    tenant_id = session.get('tenant_id')
+    if tenant_id:
+        g.tenant_id = tenant_id
+        g.schema_name = f"tenant_{tenant_id}"
 
 # app.py - Add this route (REPLACE database.py version)
 @app.route('/company-signup', methods=['GET', 'POST'])
@@ -1001,6 +1021,23 @@ def company_signup():
             flash(f"❌ Failed: {str(e)}", "danger")
 
     return render_template('company_signup.html', form=form)
+
+
+@app.route('/tenant/<int:tenant_id>/dashboard')
+def tenant_dashboard(tenant_id):
+    if not session.get('tenant_id') or session['tenant_id'] != tenant_id:
+        flash("Access denied.", "danger")
+        return redirect(url_for('login'))
+
+    # Load tenant-specific data
+    tenant_stats = get_tenant_stats(tenant_id)
+    tenant = db.session.execute(text("SELECT * FROM tenants WHERE id = :id"),
+                                {"id": tenant_id}).first()
+
+    return render_template('CompanyAdmin/dashboard.html',
+                           tenant_id=tenant_id,
+                           tenant=tenant,
+                           stats=tenant_stats)
 
 
 @app.teardown_appcontext
@@ -1102,28 +1139,32 @@ def login():
     if request.method == 'POST' and form.validate_on_submit():
         email_input = escape(form.email.data)
         password_input = escape(form.password.data)
-        user = True#User.query.filter_by(email=email_input).first()
 
-        if user and check_password_hash(user.password, password_input):
-            if not user.is_verified:
-                flash("Please verify your email before logging in.", "warning")
-                return redirect(url_for('login'))
-            
-            # Store temp user data for 2FA verification
-            session['temp_user_id'] = getattr(user, 'id', 'temp_id')
+        # ✅ NEW: Try tenant admin login FIRST
+        tenant_admin = authenticate_tenant_admin(email_input, password_input)
+
+        if tenant_admin:
+            print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
+            session['tenant_id'] = tenant_admin['tenant_id']
+            session['tenant_schema'] = tenant_admin['schema_name']
+            session['user_type'] = 'tenant_admin'
+            session['company_name'] = tenant_admin['company_name']
+
+            # Your existing 2FA flow
+            session['temp_user_id'] = tenant_admin['tenant_id']
             session['temp_user_email'] = email_input
             session['needs_2fa'] = True
-            
-            # Send 2FA code via email
+
             send_2fa_email(email_input)
-            flash("2FA code sent to your email. Please verify.", "info")
+            flash("2FA code sent to your admin account!", "info")
             return redirect(url_for('verify_2fa'))
 
-        else:
-            flash("Invalid username or password.", "danger")
-            return redirect(url_for('login'))
+        # ❌ REMOVE: user = True (this breaks everything)
+        # Keep teammate's logic if needed for other users
+        flash("Invalid email or password.", "danger")
 
     return render_template('login/login_page.html', form=form)
+
 
 @app.route('/logout')
 def logout():
@@ -1344,55 +1385,25 @@ def reset_password(token):
 
 @app.route('/verify-2fa', methods=['GET', 'POST'])
 def verify_2fa():
-    """Verify 2FA code sent to email"""
     if not session.get('needs_2fa'):
-        flash("No active login session. Please log in again.", "danger")
+        flash("No active login session.", "danger")
         return redirect(url_for('login'))
-    
+
     if request.method == 'POST':
         code = request.form.get('code', '').strip()
         email = session.get('temp_user_email')
-        
-        # Validate 2FA code (6 digits)
-        if not validate_2fa_code_format(code):
-            flash("Invalid code format. Enter 6 digits.", "danger")
-            return redirect(url_for('verify_2fa'))
-        
-        # Check if code is correct (in production: verify against DB)
-        # For now: accept code if it matches stored value in session
-        stored_code = session.get('2fa_code')
-        if stored_code and code == stored_code:
-            # Create login session with cookie
-            session_token = secrets.token_urlsafe(32)
-            
-            # Store session info
-            session['user_id'] = session.get('temp_user_id')
-            session['session_token'] = session_token
-            session['login_time'] = datetime.utcnow().isoformat()
-            session['session_expires'] = (datetime.utcnow() + timedelta(hours=24)).isoformat()
-            
-            # Clean up temp 2FA data
-            session.pop('needs_2fa', None)
-            session.pop('temp_user_id', None)
-            session.pop('temp_user_email', None)
-            session.pop('2fa_code', None)
-            
-            # Set secure cookie
-            response = redirect(url_for('login'))
-            response.set_cookie(
-                'session_token',
-                session_token,
-                max_age=86400,  # 24 hours
-                secure=False,  # Set to True in production with HTTPS
-                httponly=True,
-                samesite='Lax'
-            )
-            flash("Login successful!", "success")
-            return response
-        else:
-            flash("Incorrect 2FA code. Try again.", "danger")
-            return redirect(url_for('verify_2fa'))
-    
+
+        if validate_2fa_code_format(code) and code == session.get('2fa_code'):
+            # ✅ LOGIN SUCCESS - Route by user_type
+            if session.get('user_type') == 'tenant_admin':
+                # Tenant admin → Company dashboard
+                return redirect(url_for('tenant_dashboard', tenant_id=session['tenant_id']))
+            else:
+                # Regular user → Their dashboard
+                return redirect(url_for('dashboard'))  # Your existing dashboard
+
+        flash("Invalid 2FA code.", "danger")
+
     return render_template('login/verify_2fa.html')
 
 

@@ -141,6 +141,69 @@ master_engine = create_engine(MASTER_DB_URL)
 MasterSessionLocal = sessionmaker(bind=master_engine)
 
 
+def authenticate_tenant_admin(email: str, password: str):
+    """Find admin across tenant schemas"""
+    tenants = Tenant.query.all()
+
+    for tenant in tenants:
+        schema_name = f"tenant_{tenant.id}"
+
+        try:
+            result = db.session.execute(
+                text(f'SELECT password_hash FROM "{schema_name}".users WHERE email = :email AND role = :role'),
+                {'email': email, 'role': 'admin'}
+            ).fetchone()
+
+            if result and bcrypt.checkpw(password.encode(), result.password_hash.encode()):
+                return {
+                    'tenant_id': tenant.id,
+                    'schema_name': schema_name,
+                    'company_name': tenant.company_name
+                }
+        except:
+            continue  # Skip if table doesn't exist
+
+    return None
+
+
+def find_tenant_admin(email: str, password: str):
+    """Search ALL tenant schemas for admin user + verify password"""
+    tenants = get_all_tenants()
+
+    for tenant_row in tenants:
+        tenant_id = tenant_row.id
+        schema_name = f"tenant_{tenant_id}"
+
+        try:
+            session = MasterSessionLocal()
+            session.execute(text(f'SET search_path TO "{schema_name}", public'))
+
+            # Get user + password hash
+            user_row = session.execute(
+                text("SELECT id, email, password_hash, role FROM users WHERE email = :email"),
+                {"email": email}
+            ).fetchone()
+
+            if user_row and user_row.role == 'admin':
+                # Verify password
+                stored_hash = user_row.password_hash.encode()
+                input_hash = bcrypt.hashpw(password.encode(), stored_hash)
+
+                if input_hash == stored_hash:
+                    session.close()
+                    return {
+                        'tenant_id': tenant_id,
+                        'schema_name': schema_name,
+                        'email': user_row.email,
+                        'company_name': tenant_row.company_name
+                    }
+
+            session.close()
+        except Exception as e:
+            print(f"Skipping tenant_{tenant_id}: {e}")
+            continue
+
+    return None
 
 #class files(db.Model):
 #    __tablename__ = 'files'

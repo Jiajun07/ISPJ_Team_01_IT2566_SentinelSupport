@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="admin-dashboard">
+    <!-- Top Navigation -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div class="sidebar-toggle d-lg-none">
+            <i class="fas fa-bars fa-2x text-white"></i>
+        </div>
+        <div class="page-title">
+            <h1 class="h3 mb-0 fw-bold text-white">Overview</h1>
+        </div>
+        <div class="user-profile d-flex align-items-center">
+            <img src="{{ url_for('static', filename='img/avatar.jpg') }}" class="avatar me-2" alt="User">
+            <span class="text-white fw-semibold">{{ session.username or 'Admin' }}</span>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="row g-4">
+        <!-- Workspace Card -->
+        <div class="col-lg-8">
+            <div class="workspace-card card border-0 shadow-lg h-100">
+                <div class="card-body p-4">
+                    <div class="d-flex justify-content-between align-items-start mb-4">
+                        <div>
+                            <h2 class="h4 fw-bold mb-1">Workspace</h2>
+                            <p class="text-muted mb-0">ID: {{ tenant_id or '6787' }}</p>
+                        </div>
+                        <span class="badge bg-success px-3 py-2">Active</span>
+                    </div>
+
+                    <div class="row g-3 mb-4">
+                        <div class="col-md-6">
+                            <div class="info-item">
+                                <span class="label">Company name</span>
+                                <span class="value fw-semibold">Virge Cybersecurity</span>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="info-item">
+                                <span class="label">Onboarding date</span>
+                                <span class="value">05/12/2025</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="info-item">
+                                <span class="label">Backups</span>
+                                <span class="value">
+                                    <i class="fas fa-clock me-1 text-success"></i>
+                                    Daily @ 23:59
+                                </span>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="info-item">
+                                <span class="label">Last success</span>
+                                <span class="value text-success">12/12/2025</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security Baselines Card -->
+        <div class="col-lg-4">
+            <div class="security-card card border-0 shadow-lg h-100">
+                <div class="card-body p-4">
+                    <h3 class="h5 fw-bold mb-4">Security Baselines</h3>
+
+                    <div class="security-toggle mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>MFA Enabled</span>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" checked>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="security-toggle mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>DLP Enabled</span>
+                            <span class="badge bg-success">3 Rules</span>
+                        </div>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" checked>
+                        </div>
+                    </div>
+
+                    <div class="security-toggle">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>Data Retention</span>
+                            <span class="badge bg-info">3 Years</span>
+                        </div>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" checked>
+                        </div>
+                    </div>
+
+                    <div class="mt-4">
+                        <a href="#" class="btn btn-primary w-100">
+                            <i class="fas fa-edit me-2"></i>Edit Security Baselines
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation Sidebar -->
+    <div class="sidebar bg-dark bg-opacity-90 p-4 rounded-3">
+        <div class="sidebar-nav">
+            <a href="#" class="nav-item active">
+                <i class="fas fa-tachometer-alt me-3"></i>Overview
+            </a>
+            <a href="#" class="nav-item">
+                <i class="fas fa-users-cog me-3"></i>Roles & Users
+            </a>
+            <a href="#" class="nav-item">
+                <i class="fas fa-file-alt me-3"></i>Documents
+            </a>
+            <a href="#" class="nav-item">
+                <i class="fas fa-shield-alt me-3"></i>Security & Compliance
+            </a>
+            <a href="#" class="nav-item">
+                <i class="fas fa-database me-3"></i>Backups & Recovery
+            </a>
+            <a href="#" class="nav-item">
+                <i class="fas fa-cog me-3"></i>Tenant Settings
+            </a>
+        </div>
+    </div>
+
+    <!-- Usage Charts (Placeholder) -->
+    <div class="row g-4 mt-4">
+        <div class="col-12">
+            <div class="chart-card card border-0 shadow-lg">
+                <div class="card-body p-4">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h3 class="h5 fw-bold mb-0">Dashboard visualization of usage</h3>
+                        <select class="form-select form-select-sm" style="width: auto;">
+                            <option>Last 30 days</option>
+                        </select>
+                    </div>
+                    <div class="chart-placeholder">
+                        <!-- Chart will be here -->
+                        <canvas id="usageChart" height="100"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.admin-dashboard {
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    min-height: 100vh;
+    padding: 2rem;
+    color: white;
+    position: relative;
+}
+
+.sidebar {
+    position: fixed;
+    left: 0;
+    top: 100px;
+    height: calc(100vh - 120px);
+    width: 280px;
+    z-index: 1000;
+    overflow-y: auto;
+}
+
+.sidebar-nav .nav-item {
+    display: block;
+    color: rgba(255,255,255,0.8);
+    text-decoration: none;
+    padding: 1rem 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 0.5rem;
+    transition: all 0.3s ease;
+    font-weight: 500;
+}
+
+.sidebar-nav .nav-item:hover,
+.sidebar-nav .nav-item.active {
+    background: rgba(255,255,255,0.1);
+    color: white;
+    transform: translateX(8px);
+}
+
+.workspace-card, .security-card, .chart-card {
+    border-radius: 20px !important;
+    backdrop-filter: blur(20px);
+}
+
+.workspace-card {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+}
+
+.security-card {
+    background: rgba(13, 110, 253, 0.1);
+    border: 1px solid rgba(13, 110, 253, 0.3);
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.info-item .label {
+    font-size: 0.875rem;
+    color: rgba(255,255,255,0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.3);
+}
+
+.security-toggle .form-check-input:checked {
+    background-color: #28a745;
+    border-color: #28a745;
+}
+
+.chart-placeholder {
+    height: 300px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255,255,255,0.5);
+}
+
+@media (max-width: 992px) {
+    .sidebar {
+        position: static;
+        height: auto;
+        width: 100%;
+        margin-top: 2rem;
+    }
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    // Simple usage chart
+    const ctx = document.getElementById('usageChart');
+    if (ctx) {
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ['Dec 1', 'Dec 5', 'Dec 10', 'Dec 15', 'Dec 20', 'Dec 25'],
+                datasets: [{
+                    data: [10, 20, 15, 35, 28, 45],
+                    borderColor: '#28a745',
+                    backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { color: 'rgba(255,255,255,0.7)' } },
+                    x: { ticks: { color: 'rgba(255,255,255,0.7)' } }
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}

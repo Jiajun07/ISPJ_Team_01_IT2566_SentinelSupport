@@ -40,6 +40,14 @@ class SignUpForm(FlaskForm):
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     submit = SubmitField('Sign Up')
 
+class TwoFactorForm(FlaskForm):
+    code = StringField('Verification Code', validators=[
+        DataRequired(message="Enter 6-digit code"),
+        Length(min=6, max=6, message="Code must be 6 digits")
+    ])
+    submit = SubmitField('Verify')
+
+
 class CompanySignupForm(FlaskForm):
     email = StringField('Email', validators=[DataRequired()])
     company_region = SelectField('Company Region', choices=[('APAC','APAC'),('EMEA','EMEA')], validators=[DataRequired()])
