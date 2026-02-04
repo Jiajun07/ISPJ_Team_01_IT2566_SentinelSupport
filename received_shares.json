@@ -15,20 +15,5 @@
       "date_shared": "2026-02-04"
     }
   ],
-  "tenant_2": [
-    {
-      "name": "Chap04x.pdf",
-      "size": 770183,
-      "modified": "2026-02-04 12:57:59",
-      "owner": "John Doe",
-      "sensitivity": "Shared",
-      "url": "/download/shared/Chap04x.pdf?share=sXvvGswcp1QlSeq4IgRkDCrak6xDaUKnAF7_xd7tl0s&tenant=1",
-      "share_token": "S_uhFec2viHskuBRaF3_V-6NkoDCj0JDXp4Cc15Lxik",
-      "owner_tenant_id": "1",
-      "require_key_exchange": false,
-      "exchange_id": null,
-      "verification_status": "not_required",
-      "date_shared": "2026-02-04"
-    }
-  ]
+  "tenant_2": []
 }

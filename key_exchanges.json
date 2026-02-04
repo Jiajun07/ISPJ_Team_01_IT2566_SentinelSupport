@@ -62,5 +62,21 @@
     "recipient_confirmed": true,
     "recipient_public_key": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAn8gyEkWSm0eTDU9L2iev\ngMn5zu9/11RZUXeYJGEYtaBCSdiycL5R1/4LfMdzv6fYcW6TiBNWrQhHdAZUzrSh\ngHrV88ovxtHkl0I8GiZ0b95bu39goG1z/7AIVN5slkffxEbLYEflVG7qAHZYDnRH\nvMXibMVbLBmxaHoUWZDFl2+YR9VgdpS4T1/XXB82+abrNunYggs43W4q6hv2VK+m\nNmRkMqrq3qNlvtXGfTrnE6jeS4y6oyN+4RnQm12QYagDHE9aP2+KKDtScn+hV72E\nnADsms6Eh7Rwx9oOIVWrC7XfYLuHA+f6pmdCStr/1IcfYoN3in4fDEtrUPmmAuoy\nMQIDAQAB\n-----END PUBLIC KEY-----\n",
     "recipient_fingerprint": "YFKK5DCWWX1SEKBZ"
+  },
+  "_dvv4lNJVAUP8pcsAI90N0lyCr-opZHpAiGdmNXBcVs": {
+    "exchange_id": "_dvv4lNJVAUP8pcsAI90N0lyCr-opZHpAiGdmNXBcVs",
+    "sharer_id": "You",
+    "sharer_tenant": "1",
+    "sharer_public_key": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0HKb6vvOUIzlz1K520fz\nCnjzwEMzcX0sEw4MI84yTT2SSniSEFwETdbRVmY/iYuQsn6XNZIt7OpJD4Bfkaq1\nb+HC7f/NTuCA1omLKbjdbVZLHKIQVI7Y+kSxjoy7P3tMytT8Qwbj9WBvduuIReQw\nIRKFQCL1PbusvjSoBWj9NBkDXA31+wj1Mu1GMZ/tzg42VhrmLl70v6k2HrToLHkt\n7LBLcPIfCzF3H8IeCJaEUZF0RTKKeBAKUOVGGcYnF2yFdItdEy+Sp/ME+PzxR/KE\nwbLqDWQz9Fw3F1sA2gVyJKDMk+/hc3CR0Q5IfyxEt7leofq26yEgg2ziviVPuihP\ncQIDAQAB\n-----END PUBLIC KEY-----\n",
+    "recipient_email": "pending",
+    "recipient_tenant": "2",
+    "filename": "Chap04x.pdf",
+    "status": "verified",
+    "created": "2026-02-04T14:04:31.328617",
+    "recipient_verified": true,
+    "sharer_verified": true,
+    "recipient_confirmed": true,
+    "recipient_public_key": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA00AITrOKMUkQbMpkCjRC\nWwAQbeQUMnqVjH6H09zrya0XWTTSFDevIL3HnCLN3zW6OeC8vkP7OJzDcd7ZOH46\nAKiUK8E6Excz4pe4Pr3sthyL9C8X/oDTITovhIHRx+cZx9/bX3+NaFF/uRtLyvFT\n7b/s1mk/Y/EtYWXBP/fZkCjO44aZA+dHyXPwhG4TDJD2ogNgrlUhQKyqk/VW/e49\nXs2PKdjMvKXvnJOi+jP/OtjBpycP32VT4goLQP4bEju1WsARsBtLkMG5lgalJRM4\nXqjG5J3/sAT4qWYLzRZOQsvMNRfwRqBO3ux9fxx8/op4PP1wWi1hzyLAeP+pf2sg\n1wIDAQAB\n-----END PUBLIC KEY-----\n",
+    "recipient_fingerprint": "SXZO+ASTOMBJOG3E"
   }
 }

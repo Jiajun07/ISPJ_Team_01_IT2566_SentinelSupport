@@ -378,3 +378,13 @@ Share Token: ejz3eBWE6CuBODy2qkZaR_1FuZ000Ssb-fGDcP0dv1A
 Share Link: http://127.0.0.1:5000/shared-with-me?share=ejz3eBWE6CuBODy2qkZaR_1FuZ000Ssb-fGDcP0dv1A&tenant=2
 Password Protected: No
 ================================================================================
+
+================================================================================
+Timestamp: 2026-02-04 14:04:32
+Sharer: John Doe
+Tenant ID: 1
+Filename: Chap04x.pdf
+Share Token: ub_HIkY1UYlzeSZpAmb4eXldwrqzuornAMn4Gm1TSiM
+Share Link: http://127.0.0.1:5000/shared-with-me?share=ub_HIkY1UYlzeSZpAmb4eXldwrqzuornAMn4Gm1TSiM&tenant=1
+Password Protected: No
+================================================================================

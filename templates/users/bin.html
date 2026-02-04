@@ -1,0 +1,467 @@
+{% extends "base.html" %}
+{% block content %}
+
+<script>
+    document.body.classList.add("myfiles-body");
+</script>
+
+<div class="myfiles-shell">
+    <aside class="side-rail">
+        <!-- Account Switcher -->
+        <div style="padding: 1rem; border-bottom: 1px solid #e0e0e0; margin-bottom: 1rem;">
+            <div style="font-size: 0.75rem; color: #666; margin-bottom: 0.5rem;">Current Account:</div>
+            <div style="font-weight: 600; margin-bottom: 0.5rem;">{{ account_name }}</div>
+            <select id="account-switcher" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">
+                <option value="1" {% if tenant_id == '1' %}selected{% endif %}>Acme Corp</option>
+                <option value="2" {% if tenant_id == '2' %}selected{% endif %}>Tech Solutions</option>
+            </select>
+        </div>
+
+        <button type="button" class="upload-btn" id="upload-trigger">Upload File</button>
+
+        <nav class="rail-nav">
+            <button class="rail-link" type="button" onclick="window.location.href='/myfiles?tenant={{ tenant_id }}'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                </svg>
+                My files
+            </button>
+            <button class="rail-link" type="button" onclick="window.location.href='/shared-with-me?tenant={{ tenant_id }}'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
+                </svg>
+                Shared with me
+            </button>
+            <button class="rail-link" type="button">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                Recent
+            </button>
+            <button class="rail-link" type="button" onclick="window.location.href='/verify-identities?tenant={{ tenant_id }}'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 12l2 2 4-4m7 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Verify Identities
+            </button>
+            <button class="rail-link active" type="button" onclick="window.location.href='/bin?tenant={{ tenant_id }}'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                    <line x1="10" y1="11" x2="10" y2="17"/>
+                    <line x1="14" y1="11" x2="14" y2="17"/>
+                </svg>
+                Bin
+            </button>
+        </nav>
+    </aside>
+
+    <section class="main-stage">
+        <div class="workspace">
+            <div class="search-row" style="display: flex; gap: 15px; align-items: center;">
+                <div class="search-bar" style="flex: 1; max-width: 45%;">
+                    <svg viewBox="0 0 24 24" class="search-icon" aria-hidden="true">
+                        <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+                        <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" stroke-width="2" />
+                    </svg>
+                    <input id="file-search" type="search" placeholder="Search files in bin" aria-label="Search files">
+                </div>
+            </div>
+
+            <div class="table-card">
+                <div class="table-head">
+                    <div class="col name">Name</div>
+                    <div class="col sensitivity">Sensitivity</div>
+                    <div class="col owner">Owner</div>
+                    <div class="col date-modified">Date Modified</div>
+                    <div class="col file-size">File Size</div>
+                    <div class="col actions">Actions</div>
+                </div>
+                <div id="file-list" class="table-body">
+                    {% if files %}
+                        {% for file in files %}
+                        <div class="table-row" data-filename="{{ file.original_filename }}" data-bin-key="{{ file.bin_key }}">
+                            <div class="col name">
+                                <div class="file-cell">
+                                    <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                                        <polyline points="14 2 14 8 20 8"/>
+                                    </svg>
+                                    <span class="file-name">{{ file.original_filename }}</span>
+                                </div>
+                            </div>
+                            <div class="col sensitivity">Archived</div>
+                            <div class="col owner">You</div>
+                            <div class="col date-modified">
+                                {{ file.deleted_at | replace('T', ' ') | truncate(19, True, '') }}
+                            </div>
+                            <div class="col file-size">-</div>
+                            <div class="col actions">
+                                <button class="action-btn restore-btn" title="Restore" data-bin-key="{{ file.bin_key }}">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M3 7v6h6M21 17v-6h-6"/>
+                                        <path d="M16 5.34A9.956 9.956 0 0 0 12 3c-5.523 0-10 4.477-10 10"/>
+                                        <path d="M8 18.66A9.956 9.956 0 0 0 12 21c5.523 0 10-4.477 10-10"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn delete-btn" title="Delete Permanently" data-bin-key="{{ file.bin_key }}">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="3 6 5 6 21 6"/>
+                                        <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                                        <line x1="10" y1="11" x2="10" y2="17"/>
+                                        <line x1="14" y1="11" x2="14" y2="17"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="empty-state" style="padding: 60px 20px; text-align: center; color: #999;">
+                            <svg style="width: 64px; height: 64px; margin: 0 auto 20px; opacity: 0.5;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                            </svg>
+                            <p>Your bin is empty</p>
+                            <p style="font-size: 14px; color: #bbb;">Deleted files will appear here for 30 days</p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<div id="bin-menu" class="file-menu" style="display: none;">
+    <button class="menu-item" data-action="restore">
+        <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 7v6h6M21 17v-6h-6"/>
+            <path d="M16 5.34A9.956 9.956 0 0 0 12 3c-5.523 0-10 4.477-10 10"/>
+            <path d="M8 18.66A9.956 9.956 0 0 0 12 21c5.523 0 10-4.477 10-10"/>
+        </svg>
+        Restore
+    </button>
+    <button class="menu-item menu-item-danger" data-action="delete">
+        <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/>
+            <line x1="14" y1="11" x2="14" y2="17"/>
+        </svg>
+        Delete
+    </button>
+</div>
+
+<!-- Restore Confirmation Modal -->
+<div id="restore-modal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 450px; padding: 40px; border-radius: 12px;">
+        <h3 style="margin-bottom: 20px; font-size: 18px; color: #333;">Restore File</h3>
+        <p id="restore-message" style="margin-bottom: 30px; font-size: 14px; color: #666; line-height: 1.6;">
+            Are you sure you want to restore <span id="restore-filename" style="font-weight: 600;"></span>?
+        </p>
+        
+        <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;">
+            <button id="restore-cancel-btn" style="padding: 10px 24px; background: white; border: 1px solid #d0d0d0; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; color: #333; transition: all 0.2s;">Cancel</button>
+            <button id="restore-confirm-btn" style="padding: 10px 28px; background: #4a90e2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; transition: all 0.2s;">Restore</button>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 450px; padding: 40px; border-radius: 12px;">
+        <h3 style="margin-bottom: 20px; font-size: 18px; color: #c00;">Permanently Delete</h3>
+        <p id="delete-message" style="margin-bottom: 30px; font-size: 14px; color: #666; line-height: 1.6;">
+            Are you sure you want to permanently delete <span id="delete-filename" style="font-weight: 600;"></span>? This action cannot be undone.
+        </p>
+        
+        <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;">
+            <button id="delete-cancel-btn" style="padding: 10px 24px; background: white; border: 1px solid #d0d0d0; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; color: #333; transition: all 0.2s;">Cancel</button>
+            <button id="delete-confirm-btn" style="padding: 10px 28px; background: #e74c3c; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; transition: all 0.2s;">Delete Permanently</button>
+        </div>
+    </div>
+</div>
+
+<style>
+.modal {
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.2s ease-in;
+}
+
+.modal-content {
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.action-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s;
+    color: #666;
+}
+
+.action-btn:hover {
+    background: #f0f0f0;
+    color: #333;
+}
+
+.restore-btn:hover {
+    color: #4a90e2;
+}
+
+.delete-btn:hover {
+    color: #e74c3c;
+}
+
+.action-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+.table-head {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1.5fr 0.8fr 120px;
+    gap: 20px;
+    padding: 12px 16px;
+    font-weight: 600;
+    font-size: 13px;
+    color: #666;
+    background-color: #f5f5f5;
+    border-bottom: 1px solid #e0e0e0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.table-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1.5fr 0.8fr 120px;
+    gap: 20px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #f0f0f0;
+    align-items: center;
+    transition: background-color 0.2s;
+}
+
+.table-row:hover {
+    background-color: #f9f9f9;
+}
+
+.col {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.col.actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.file-cell {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.file-icon {
+    width: 20px;
+    height: 20px;
+    color: #999;
+    flex-shrink: 0;
+}
+
+.file-name {
+    color: #333;
+    font-size: 14px;
+    word-break: break-word;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.empty-state {
+    grid-column: 1 / -1;
+}
+</style>
+
+<script>
+    const tenantId = '{{ tenant_id }}';
+    let currentBinKey = null;
+    let currentFilename = null;
+    const binMenu = document.getElementById("bin-menu");
+    const fileList = document.getElementById("file-list");
+
+    const showBinMenu = (event, filename, binKey) => {
+        currentFilename = filename;
+        currentBinKey = binKey;
+        binMenu.style.display = "block";
+        const x = event.clientX;
+        const y = event.clientY;
+        binMenu.style.top = `${y + window.scrollY}px`;
+        binMenu.style.left = `${x + window.scrollX - 150}px`;
+    };
+
+    const hideBinMenu = () => {
+        binMenu.style.display = "none";
+    };
+
+    // Restore button click
+    document.querySelectorAll('.restore-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            currentBinKey = this.dataset.binKey;
+            const row = this.closest('.table-row');
+            currentFilename = row.dataset.filename;
+            
+            document.getElementById('restore-filename').textContent = currentFilename;
+            document.getElementById('restore-modal').style.display = 'flex';
+        });
+    });
+
+    // Delete button click
+    document.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            currentBinKey = this.dataset.binKey;
+            const row = this.closest('.table-row');
+            currentFilename = row.dataset.filename;
+            
+            document.getElementById('delete-filename').textContent = currentFilename;
+            document.getElementById('delete-modal').style.display = 'flex';
+        });
+    });
+
+    // Modal close buttons
+    document.getElementById('restore-cancel-btn').addEventListener('click', function() {
+        document.getElementById('restore-modal').style.display = 'none';
+    });
+
+    document.getElementById('delete-cancel-btn').addEventListener('click', function() {
+        document.getElementById('delete-modal').style.display = 'none';
+    });
+
+    // Restore confirm
+    document.getElementById('restore-confirm-btn').addEventListener('click', async function() {
+        try {
+            const response = await fetch(`/bin/restore/${encodeURIComponent(currentBinKey)}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                alert('File restored successfully!');
+                document.getElementById('restore-modal').style.display = 'none';
+                location.reload();
+            } else {
+                const data = await response.json();
+                alert('Error: ' + (data.error || 'Failed to restore file'));
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+        }
+    });
+
+    // Delete confirm
+    document.getElementById('delete-confirm-btn').addEventListener('click', async function() {
+        try {
+            const response = await fetch(`/bin/permanent-delete/${encodeURIComponent(currentBinKey)}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                alert('File permanently deleted!');
+                document.getElementById('delete-modal').style.display = 'none';
+                location.reload();
+            } else {
+                const data = await response.json();
+                alert('Error: ' + (data.error || 'Failed to delete file'));
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+        }
+    });
+
+    // Search functionality
+    document.getElementById('file-search').addEventListener('keyup', function(e) {
+        const searchTerm = e.target.value.toLowerCase();
+        document.querySelectorAll('.table-row').forEach(row => {
+            const filename = row.dataset.filename.toLowerCase();
+            row.style.display = filename.includes(searchTerm) ? '' : 'none';
+        });
+    });
+
+    fileList.addEventListener("contextmenu", (event) => {
+        const row = event.target.closest(".table-row");
+        if (!row) return;
+        event.preventDefault();
+        showBinMenu(event, row.dataset.filename, row.dataset.binKey);
+    });
+
+    binMenu.addEventListener("click", (event) => {
+        const menuItem = event.target.closest(".menu-item");
+        if (!menuItem) return;
+        const action = menuItem.dataset.action;
+
+        if (action === "restore") {
+            document.getElementById('restore-filename').textContent = currentFilename;
+            document.getElementById('restore-modal').style.display = 'flex';
+        } else if (action === "delete") {
+            document.getElementById('delete-filename').textContent = currentFilename;
+            document.getElementById('delete-modal').style.display = 'flex';
+        }
+
+        hideBinMenu();
+    });
+
+    document.addEventListener("click", (event) => {
+        if (!event.target.closest(".file-menu")) {
+            hideBinMenu();
+        }
+    });
+
+    // Account switcher
+    document.getElementById('account-switcher').addEventListener('change', function(e) {
+        window.location.href = '/bin?tenant=' + e.target.value;
+    });
+
+    // Close modals when clicking outside
+    document.getElementById('restore-modal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            this.style.display = 'none';
+        }
+    });
+
+    document.getElementById('delete-modal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            this.style.display = 'none';
+        }
+    });
+</script>
+{% endblock %}

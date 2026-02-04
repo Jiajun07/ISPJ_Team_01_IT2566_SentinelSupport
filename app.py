@@ -31,6 +31,8 @@ import shutil
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
@@ -48,6 +50,14 @@ with app.app_context():
      db.create_all()  # creates Tenant model table
 
 load_dotenv()
+
+# Initialize background scheduler for bin cleanup
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=lambda: cleanup_bin_wrapper(), trigger="interval", hours=1, id='bin_cleanup')
+scheduler.start()
+
+# Shut down the scheduler when exiting the app
+atexit.register(lambda: scheduler.shutdown())
 
 
 UPLOAD_FOLDER = os.path.join(app.root_path, 'DLPScannerModules', 'testfiles', 'upload')
@@ -353,6 +363,9 @@ SHARE_LINKS_LOG = os.path.join(os.path.dirname(__file__), "share_links_log.txt")
 RECEIVED_SHARES_FILE = os.path.join(os.path.dirname(__file__), "received_shares.json")
 KEY_EXCHANGE_JSON = os.path.join(os.path.dirname(__file__), "key_exchanges.json")
 USER_KEYS_JSON = os.path.join(os.path.dirname(__file__), "user_keys.json")
+BIN_METADATA_FILE = os.path.join(os.path.dirname(__file__), "bin_metadata.json")
+BIN_FOLDER = os.path.join(os.path.dirname(__file__), "bin")
+os.makedirs(BIN_FOLDER, exist_ok=True)
 
 def load_received_shares():
     """Load received shares from JSON file"""
@@ -383,6 +396,154 @@ def save_share_links(links):
     """Save share links to JSON file"""
     with open(SHARE_LINKS_FILE, 'w') as f:
         json.dump(links, f, indent=2)
+
+
+def load_bin_metadata():
+    """Load bin metadata from JSON file"""
+    if not os.path.exists(BIN_METADATA_FILE):
+        return {}
+    try:
+        with open(BIN_METADATA_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
+
+def save_bin_metadata(metadata):
+    """Save bin metadata to JSON file"""
+    with open(BIN_METADATA_FILE, 'w') as f:
+        json.dump(metadata, f, indent=2, default=str)
+
+
+def move_file_to_bin(filename, tenant_id, original_path):
+    """Move a file to bin instead of permanently deleting it"""
+    bin_metadata = load_bin_metadata()
+    
+    # Create unique bin entry key
+    bin_key = f"tenant_{tenant_id}/{filename}_{int(datetime.now().timestamp())}"
+    
+    # Create bin file path
+    bin_filename = f"{tenant_id}_{filename}_{int(datetime.now().timestamp())}"
+    bin_file_path = os.path.join(BIN_FOLDER, bin_filename)
+    
+    # Copy file to bin folder
+    try:
+        if os.path.exists(original_path):
+            shutil.copy2(original_path, bin_file_path)
+    except Exception as e:
+        print(f"Error copying file to bin: {e}")
+    
+    # Store metadata
+    bin_metadata[bin_key] = {
+        'original_filename': filename,
+        'tenant_id': tenant_id,
+        'bin_filename': bin_filename,
+        'deleted_at': datetime.now().isoformat(),
+        'original_path': original_path,
+        'versions': get_file_versions(filename, tenant_id) if filename else []
+    }
+    
+    save_bin_metadata(bin_metadata)
+    return bin_key
+
+
+def restore_file_from_bin(bin_key):
+    """Restore a file from bin"""
+    bin_metadata = load_bin_metadata()
+    
+    if bin_key not in bin_metadata:
+        return False, "File not found in bin"
+    
+    entry = bin_metadata[bin_key]
+    filename = entry['original_filename']
+    tenant_id = entry['tenant_id']
+    bin_filename = entry['bin_filename']
+    bin_file_path = os.path.join(BIN_FOLDER, bin_filename)
+    
+    # Restore file to original location
+    tenant_folder = get_tenant_upload_folder(tenant_id)
+    restore_path = os.path.join(tenant_folder, filename)
+    
+    try:
+        if os.path.exists(bin_file_path):
+            shutil.copy2(bin_file_path, restore_path)
+        
+        # Restore version history if exists
+        if entry.get('versions'):
+            versions = load_versions()
+            version_key = f"tenant_{tenant_id}/{filename}"
+            versions[version_key] = entry['versions']
+            save_versions(versions)
+        
+        # Remove from bin
+        del bin_metadata[bin_key]
+        save_bin_metadata(bin_metadata)
+        
+        return True, "File restored successfully"
+    except Exception as e:
+        return False, str(e)
+
+
+def permanently_delete_from_bin(bin_key):
+    """Permanently delete a file from bin"""
+    bin_metadata = load_bin_metadata()
+    
+    if bin_key not in bin_metadata:
+        return False, "File not found in bin"
+    
+    entry = bin_metadata[bin_key]
+    bin_filename = entry['bin_filename']
+    bin_file_path = os.path.join(BIN_FOLDER, bin_filename)
+    
+    try:
+        # Delete bin file
+        if os.path.exists(bin_file_path):
+            os.remove(bin_file_path)
+        
+        # Remove metadata
+        del bin_metadata[bin_key]
+        save_bin_metadata(bin_metadata)
+        
+        return True, "File permanently deleted"
+    except Exception as e:
+        return False, str(e)
+
+
+def cleanup_bin():
+    """Automatically delete files from bin older than 30 days"""
+    bin_metadata = load_bin_metadata()
+    current_time = datetime.now()
+    deleted_count = 0
+    
+    for bin_key, entry in list(bin_metadata.items()):
+        try:
+            deleted_at = datetime.fromisoformat(entry['deleted_at'])
+            if (current_time - deleted_at).days >= 30:
+                # Permanently delete the file
+                bin_filename = entry['bin_filename']
+                bin_file_path = os.path.join(BIN_FOLDER, bin_filename)
+                
+                if os.path.exists(bin_file_path):
+                    os.remove(bin_file_path)
+                
+                del bin_metadata[bin_key]
+                deleted_count += 1
+        except Exception as e:
+            print(f"Error cleaning up bin entry {bin_key}: {e}")
+    
+    if deleted_count > 0:
+        save_bin_metadata(bin_metadata)
+    
+    print(f"✅ Bin cleanup: {deleted_count} files permanently deleted")
+    return deleted_count
+
+
+def cleanup_bin_wrapper():
+    """Wrapper for scheduler to run cleanup_bin safely"""
+    try:
+        cleanup_bin()
+    except Exception as e:
+        print(f"❌ Error in scheduled bin cleanup: {e}")
 
 
 def add_verified_share_to_recipient(exchange_id, exchange):
@@ -1471,10 +1632,13 @@ def delete_file():
         return jsonify({"error": "File not found"}), 404
 
     try:
-        # Delete the main file
+        # Move file to bin instead of deleting
+        bin_key = move_file_to_bin(filename, tenant_id, file_path)
+        
+        # Delete the main file from original location
         os.remove(file_path)
         
-        # Delete all version files from versions folder
+        # Delete all version files from versions folder (they're backed up in bin_metadata)
         versions = get_file_versions(filename, tenant_id)
         for version in versions:
             if 'version_file' in version:
@@ -1485,7 +1649,7 @@ def delete_file():
         # Delete version history from JSON
         delete_file_versions(filename, tenant_id)
 
-        # Remove from received shares for all tenants
+        # Remove from received shares for all tenants (file no longer appears in shared_with_me)
         received_shares = load_received_shares()
         updated = False
         for tenant_key, files in list(received_shares.items()):
@@ -1506,9 +1670,98 @@ def delete_file():
         if share_links_updated:
             save_share_links(share_links)
         
-        return jsonify({"message": "File deleted successfully"}), 200
+        return jsonify({"message": "File moved to bin", "bin_key": bin_key}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/bin', methods=['GET'])
+def view_bin():
+    """View all files in bin for current tenant"""
+    tenant_id = get_current_tenant()
+    account_info = DUMMY_ACCOUNTS.get(tenant_id, {'name': 'Unknown', 'owner': 'You'})
+    
+    # Load bin metadata and filter by tenant
+    bin_metadata = load_bin_metadata()
+    tenant_bin_files = []
+    
+    for bin_key, entry in bin_metadata.items():
+        if str(entry.get('tenant_id')) == str(tenant_id):
+            # Calculate days until auto-deletion
+            deleted_at = datetime.fromisoformat(entry['deleted_at'])
+            days_remaining = 30 - (datetime.now() - deleted_at).days
+            
+            tenant_bin_files.append({
+                'bin_key': bin_key,
+                'original_filename': entry['original_filename'],
+                'deleted_at': entry['deleted_at'],
+                'days_remaining': max(0, days_remaining),
+                'original_path': entry['original_path']
+            })
+    
+    # Sort by deleted_at (newest first)
+    tenant_bin_files.sort(key=lambda x: x['deleted_at'], reverse=True)
+    
+    return render_template("users/bin.html", files=tenant_bin_files, tenant_id=tenant_id, account_name=account_info['name'])
+
+
+@app.route('/bin/restore/<path:bin_key>', methods=['POST'])
+@csrf.exempt
+def restore_bin_file(bin_key):
+    """Restore a file from bin"""
+    tenant_id = get_current_tenant()
+    bin_metadata = load_bin_metadata()
+    
+    # Verify the file belongs to current tenant
+    if bin_key not in bin_metadata:
+        return jsonify({"error": "File not found in bin"}), 404
+    
+    entry = bin_metadata[bin_key]
+    if str(entry.get('tenant_id')) != str(tenant_id):
+        return jsonify({"error": "Unauthorized"}), 403
+    
+    try:
+        success, message = restore_file_from_bin(bin_key)
+        if success:
+            return jsonify({"message": message}), 200
+        else:
+            return jsonify({"error": message}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/bin/permanent-delete/<path:bin_key>', methods=['POST'])
+@csrf.exempt
+def permanent_delete_bin_file(bin_key):
+    """Permanently delete a file from bin"""
+    tenant_id = get_current_tenant()
+    bin_metadata = load_bin_metadata()
+    
+    # Verify the file belongs to current tenant
+    if bin_key not in bin_metadata:
+        return jsonify({"error": "File not found in bin"}), 404
+    
+    entry = bin_metadata[bin_key]
+    if str(entry.get('tenant_id')) != str(tenant_id):
+        return jsonify({"error": "Unauthorized"}), 403
+    
+    try:
+        success, message = permanently_delete_from_bin(bin_key)
+        if success:
+            return jsonify({"message": message}), 200
+        else:
+            return jsonify({"error": message}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/bin/cleanup', methods=['POST'])
+@csrf.exempt
+def cleanup_expired_bin_files():
+    """Manually trigger cleanup of files older than 30 days (can also be scheduled)"""
+    # Only super admins should be able to call this
+    deleted_count = cleanup_bin()
+    return jsonify({"message": f"Cleaned up {deleted_count} expired files from bin"}), 200
 
 
 @app.route('/upload', methods=['POST'])
