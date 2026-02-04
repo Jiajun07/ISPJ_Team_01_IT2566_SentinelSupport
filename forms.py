@@ -40,6 +40,15 @@ class SignUpForm(FlaskForm):
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     submit = SubmitField('Sign Up')
 
+class CompanySignupForm(FlaskForm):
+    email = StringField('Email', validators=[DataRequired()])
+    company_region = SelectField('Company Region', choices=[('APAC','APAC'),('EMEA','EMEA')], validators=[DataRequired()])
+    company_name = StringField('Company name', validators=[DataRequired(), Length(min=2)])
+    company_industry = StringField('Company Industry', validators=[DataRequired()])
+    password = PasswordField('Password', validators=[DataRequired(), Length(min=8)])
+    confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
+    submit = SubmitField('Sign Up')
+
 
 class ForgetPasswordForm(FlaskForm):
     email = StringField('Email', validators=[DataRequired(), Email()])

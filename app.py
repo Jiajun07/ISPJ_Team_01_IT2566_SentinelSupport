@@ -7,10 +7,10 @@ from flask import Flask, g, render_template, request, redirect, url_for, send_fr
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
-from database import create_tenant, db, MasterSessionLocal
+from database import db, MasterSessionLocal, list_backups, restore_backup, get_last_backup
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
-from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm
+from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm
 from werkzeug.security import generate_password_hash, check_password_hash
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -30,7 +30,19 @@ import shutil
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
+app.config['SQLALCHEMY_DATABASE_URI'] = (
+    "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
+    "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
+)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Initialize DB
+db.init_app(app)
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+# Create public.tenants table (run once)
+with app.app_context():
+     db.create_all()  # creates Tenant model table
+
 load_dotenv()
 
 
@@ -79,20 +91,6 @@ fileProcessor = FileProcessor(fileConfigPath)
 def home():
     return render_template("front_page.html")
 
-app.config['SQLALCHEMY_DATABASE_URI'] = (
-    "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
-    "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
-)
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Initialize DB
-# db.init_app(app)
-# s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
-
-
-# Create public.tenants table (run once)
-# with app.app_context():
-#     db.create_all()  # creates Tenant model table
 
 
 # 🔑 TENANT CONTEXT (SCHEMA SWITCHING) - CRITICAL FIX
@@ -925,6 +923,84 @@ def download_file(filename):
     download_name = os.path.splitext(filename)[0] + actual_ext
     
     return send_from_directory(tenant_folder, filename, as_attachment=True, download_name=download_name)
+
+
+# app.py - Add this route (REPLACE database.py version)
+@app.route('/company-signup', methods=['GET', 'POST'])
+def company_signup():
+    form = CompanySignupForm()
+
+    if form.validate_on_submit():
+        try:
+            # 1. Create tenant record
+            tenant = Tenant(company_name=form.company_name.data)
+            db.session.add(tenant)
+            db.session.flush()
+            tenant_id = tenant.id
+            schema_name = f"tenant_{tenant_id}"
+
+            print(f"🔄 Creating {schema_name}...")
+
+            # 2. Create schema
+            db.session.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
+
+            # 3. Create tables - RAW STRINGS (no %s binding)
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".users (
+                    id SERIAL PRIMARY KEY,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    role VARCHAR(50) NOT NULL DEFAULT 'user',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            '''))
+
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".documents (
+                    id SERIAL PRIMARY KEY,
+                    owner_user_id INT REFERENCES "{schema_name}".users(id),
+                    file_path TEXT NOT NULL,
+                    classification VARCHAR(50) NOT NULL,
+                    version INT DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            '''))
+
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".audit_logs (
+                    id SERIAL PRIMARY KEY,
+                    user_id INT REFERENCES "{schema_name}".users(id),
+                    action VARCHAR(100) NOT NULL,
+                    target_type VARCHAR(50),
+                    target_id INT,
+                    details TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            '''))
+
+            # 4. Create admin user - RAW STRING (no parameters)
+            import bcrypt
+            password_hash = bcrypt.hashpw(form.password.data.encode(), bcrypt.gensalt()).decode()
+            email = form.email.data
+
+            # ✅ RAW STRING - NO BINDING
+            db.session.execute(text(f'''
+                INSERT INTO "{schema_name}".users (email, password_hash, role) 
+                VALUES ('{email}', '{password_hash}', 'admin')
+            '''))
+
+            db.session.commit()
+            print(f"✅ tenant_{tenant_id} FULLY created with ALL tables!")
+
+            flash(f"✅ '{form.company_name.data}' created successfully!", "success")
+            return redirect(url_for('login'))
+
+        except Exception as e:
+            db.session.rollback()
+            print(f"❌ ERROR: {e}")
+            flash(f"❌ Failed: {str(e)}", "danger")
+
+    return render_template('company_signup.html', form=form)
 
 
 @app.teardown_appcontext

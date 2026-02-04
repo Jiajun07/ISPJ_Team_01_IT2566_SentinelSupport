@@ -4,7 +4,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 import bcrypt
-
+import os
+import json
+import datetime
 # Supabase connection (same as your app.py)
 MASTER_DB_URL = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport*2026@"
@@ -22,62 +24,83 @@ class Tenant(db.Model):
     created_at = db.Column(db.DateTime, default=db.func.now())
 
 
-def create_tenant(company_name: str, admin_email: str, admin_password: str):
-    """Creates tenant schema + identical tables + admin user"""
+
+
+def get_last_backup(tenant_id: int):
+    """Get last backup timestamp for UI"""
+    # Mock for now - replace with real backup log table
+    return "Dec 15, 2025 15:23 PM"
+
+
+def list_backups(tenant_id: int):
+    """List available backups for restore dropdown"""
+    # Scan backups folder or backup_logs table
+    backups_dir = "backups"
+    if not os.path.exists(backups_dir):
+        return []
+
+    pattern = f"tenant_{tenant_id}_*.json"
+    import glob
+    files = glob.glob(os.path.join(backups_dir, pattern))
+    return [os.path.basename(f) for f in sorted(files, reverse=True)[:10]]  # Last 10
+
+
+def backup_tenant(tenant_id: int):
+    schema = f"tenant_{tenant_id}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    session = MasterSessionLocal()
+    session.execute(text(f'SET search_path TO "{schema}", public'))
+
+    users = session.execute(text("SELECT id, email, password_hash, role, created_at FROM users")).mappings().all()
+    documents = session.execute(text("SELECT * FROM documents")).mappings().all()
+    audit_logs = session.execute(text("SELECT * FROM audit_logs")).mappings().all()
+    session.close()
+
+    backup_data = {
+        "tenant_id": tenant_id,
+        "timestamp": timestamp,
+        "users": list(users),
+        "documents": list(documents),
+        "audit_logs": list(audit_logs),
+    }
+
+    os.makedirs("backups", exist_ok=True)
+    backup_path = f"backups/tenant_{tenant_id}_{timestamp}.json"
+    with open(backup_path, "w") as f:
+        json.dump(backup_data, f, default=str, indent=2)
+
+    return backup_path
+
+def restore_backup(tenant_id: int, backup_path: str):
+    """Restore tenant from backup file"""
     try:
-        # 1. Create public.tenants record
-        tenant = Tenant(company_name=company_name)
-        db.session.add(tenant)
-        db.session.flush()
-        tenant_id = tenant.id
-        schema_name = f"tenant_{tenant_id}"
+        schema = f'tenant_{tenant_id}'
+        session = MasterSessionLocal()
+        session.execute(text(f'SET search_path TO "{schema}", public'))
 
-        # 2. CREATE SCHEMA (Supabase allows this)
-        db.session.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
+        # Clear existing data (dangerous!)
+        session.execute(text('TRUNCATE users, documents, audit_logs RESTART IDENTITY CASCADE'))
 
-        # 3. CREATE IDENTICAL TABLES
-        tables_sql = f"""
-        CREATE TABLE IF NOT EXISTS "{schema_name}".users (
-            id SERIAL PRIMARY KEY,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            password_hash VARCHAR(255) NOT NULL,
-            role VARCHAR(50) NOT NULL DEFAULT 'user',
-            created_at TIMESTAMP DEFAULT NOW()
-        );
-        CREATE TABLE IF NOT EXISTS "{schema_name}".documents (
-            id SERIAL PRIMARY KEY,
-            owner_user_id INT REFERENCES "{schema_name}".users(id),
-            file_path TEXT NOT NULL,
-            classification VARCHAR(50) NOT NULL,
-            version INT DEFAULT 1,
-            created_at TIMESTAMP DEFAULT NOW()
-        );
-        CREATE TABLE IF NOT EXISTS "{schema_name}".audit_logs (
-            id SERIAL PRIMARY KEY,
-            user_id INT REFERENCES "{schema_name}".users(id),
-            action VARCHAR(100) NOT NULL,
-            target_type VARCHAR(50),
-            target_id INT,
-            details TEXT,
-            created_at TIMESTAMP DEFAULT NOW()
-        );
-        """
-        db.session.execute(text(tables_sql))
+        # Load backup data
+        with open(backup_path, 'r') as f:
+            backup_data = json.load(f)
 
-        # 4. Insert admin user
-        password_hash = bcrypt.hashpw(admin_password.encode(), bcrypt.gensalt()).decode()
-        db.session.execute(
-            text(f'INSERT INTO "{schema_name}".users (email, password_hash, role) VALUES (%s, %s, %s)'),
-            (admin_email, password_hash, 'admin')
-        )
+        # Restore users (example)
+        for user_data in backup_data.get('users', []):
+            session.execute(text("""
+                INSERT INTO users (id, email, password_hash, role, created_at)
+                VALUES (%(id)s, %(email)s, %(password_hash)s, %(role)s, %(created_at)s)
+            """), user_data)
 
-        db.session.commit()
-        print(f"✅ Created {schema_name} with identical tables + admin user")
-        return tenant_id, schema_name
+        session.commit()
+        session.close()
+        print(f"✅ Restored tenant_{tenant_id} from {backup_path}")
+        return True
 
     except Exception as e:
-        db.session.rollback()
-        raise Exception(f"Tenant creation failed: {str(e)}")
+        print(f"❌ Restore failed: {e}")
+        return False
 
 
 def get_all_tenants():
@@ -117,10 +140,7 @@ def get_tenant_stats(tenant_id: int):
 master_engine = create_engine(MASTER_DB_URL)
 MasterSessionLocal = sessionmaker(bind=master_engine)
 
-def get_tenant_engine(db_name: str) -> Engine:
-    return create_engine(
-        f"postgresql://postgres:Jiajun07@@2025@localhost:5432/{db_name}"
-    )
+
 
 #class files(db.Model):
 #    __tablename__ = 'files'
