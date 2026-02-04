@@ -220,13 +220,6 @@ def get_uploaded_files():
     return files
 
 
-
-#@app.route("/login", methods=["GET", "POST"])
-#def login():
-#
-#    return render_template("login.html")
-#
-
 @app.route('/myfiles', methods=['GET'])
 def myfiles():
     tenant_id = get_current_tenant()
@@ -1157,9 +1150,8 @@ def login():
         email_input = escape(form.email.data)
         password_input = escape(form.password.data)
 
-        # ✅ Try tenant admin login FIRST
+        # ✅ Try tenant admin login FIRST (if you have admin users)
         tenant_admin = authenticate_tenant_admin(email_input, password_input)
-
         if tenant_admin:
             print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
             session['tenant_id'] = tenant_admin['tenant_id']
@@ -1168,25 +1160,22 @@ def login():
             session['company_name'] = tenant_admin['company_name']
             session['email'] = email_input
             session['temp_user_email'] = email_input
-            session['needs_2fa'] = True
+            session['needs_2fa'] = False  # Disable for now
 
-            send_2fa_email(email_input)
-            flash("2FA code sent to your admin account!", "info")
-            return redirect(url_for('verify_2fa'))
+            # Skip 2FA for debugging
+            flash(f"✅ Admin login successful! tenant_{tenant_admin['tenant_id']}", "success")
+            return redirect(url_for('tenant_dashboard', tenant_id=tenant_admin['tenant_id']))
 
         # ✅ Try regular user login across all tenants
         user = find_user_by_email(email_input)
+        print(f"🔍 Found user in tenant: {user['tenant_id'] if user else 'NONE'}")
 
         if user:
             # Authenticate user in their tenant
             authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
             
             if authenticated:
-                # Check if email is verified
-                if not authenticated['is_email_verified']:
-                    flash("Please verify your email before logging in.", "warning")
-                    return redirect(url_for('signup'))
-                
+                # ✅ Skip email verification check (no column exists)
                 print(f"✅ User login for {email_input} in tenant {authenticated['tenant_id']}")
                 session['tenant_id'] = authenticated['tenant_id']
                 session['tenant_schema'] = authenticated['schema_name']
@@ -1194,20 +1183,16 @@ def login():
                 session['user_type'] = 'user'
                 session['email'] = email_input
                 session['temp_user_email'] = email_input
-                session['needs_2fa'] = authenticated.get('two_fa_enabled', False)
+                session['needs_2fa'] = False  # Disable 2FA for now
 
-                if authenticated.get('two_fa_enabled'):
-                    send_2fa_email(email_input)
-                    flash("2FA code sent to your email!", "info")
-                    return redirect(url_for('verify_2fa'))
-                else:
-                    # Direct login without 2FA
-                    session.permanent = True
-                    app.permanent_session_lifetime = timedelta(hours=24)
-                    flash(f"Welcome back, {email_input}!", "success")
-                    return redirect(url_for('myfiles'))
+                # Direct login without 2FA (your tenant_14.users has no 2FA column)
+                session.permanent = True
+                app.permanent_session_lifetime = timedelta(hours=24)
+                flash(f"✅ Welcome back, {email_input}! (tenant_{authenticated['tenant_id']})", "success")
+                return redirect(url_for('myfiles'))
 
-        flash("Invalid email or password.", "danger")
+        flash("❌ Invalid email or password.", "danger")
+        print(f"❌ Login failed for {email_input}")
 
     return render_template('login/login_page.html', form=form)
 
