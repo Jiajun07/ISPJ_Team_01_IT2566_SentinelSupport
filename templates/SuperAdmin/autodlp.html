@@ -12,6 +12,7 @@
         <h1>DLP Scanner</h1>
         <div class="upload-section">
             <form method="POST" enctype="multipart/form-data">
+                {{ csrf_token() }}
                 <div class="upload-area">
                     <input type="file" name="file" id="fileInput"
                         accept=".txt,.csv,.pdf,.docx,.json,.xml,.html,.xlsx,.pptx,.jpg,.jpeg,.png,.gif" required>
