@@ -1,4 +1,4 @@
-{% extends "admin/dashboard.html" %}
+{% extends "admin_base.html" %}
 
 {% block content %}
 <div class="container-fluid">
@@ -36,19 +36,20 @@
 
                         <div class="row g-4 mb-4">
                             <div class="col-md-6">
-                                {{ form.dlp_rules.label(class="form-label fw-semibold") }}
-                                {{ form.dlp_rules(class="form-control", placeholder="3") }}
+                                {{ form.dlp_rule_count.label(class="form-label fw-semibold") }}  <!-- ✅ FIXED -->
+                                {{ form.dlp_rule_count(class="form-control", placeholder="3") }}
                                 <small class="form-text text-muted">Number of DLP classification rules</small>
                             </div>
                             <div class="col-md-6">
-                                {{ form.retention_days.label(class="form-label fw-semibold") }}
-                                {{ form.retention_days(class="form-control", placeholder="365") }}
+                                {{ form.data_retention_days.label(class="form-label fw-semibold") }}  <!-- ✅ FIXED -->
+                                {{ form.data_retention_days(class="form-control", placeholder="365") }}
                                 <small class="form-text text-muted">Days before data auto-deletion</small>
                             </div>
                         </div>
 
+
                         <div class="form-check mb-4">
-                            {{ form.enable_rls(class="form-check-input", id="rls") }}
+                            {{ form.rls_enabled(class="form-check-input", id="rls") }}  <!-- ✅ FIXED -->
                             <label class="form-check-label fw-semibold" for="rls">
                                 <i class="fas fa-lock me-2 text-danger"></i>
                                 Enable Row Level Security (RLS)
@@ -57,6 +58,7 @@
                                 <strong>Recommended:</strong> Prevents cross-user data access within tenant
                             </div>
                         </div>
+
 
                         <button type="submit" class="btn btn-success btn-lg px-5 py-3 fw-bold w-100">
                             <i class="fas fa-check-circle me-2"></i>

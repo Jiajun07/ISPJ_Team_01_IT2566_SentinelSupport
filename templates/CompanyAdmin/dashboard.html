@@ -1,14 +1,11 @@
-{% extends "base.html" %}
+{% extends "admin_base.html" %}
 
 {% block content %}
 <div class="admin-dashboard">
     <!-- Top Navigation -->
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <div class="sidebar-toggle d-lg-none">
-            <i class="fas fa-bars fa-2x text-white"></i>
-        </div>
         <div class="page-title">
-            <h1 class="h3 mb-0 fw-bold text-white">Overview</h1>
+            <h1 class="h3 mb-0 fw-bold text-white">Welcome, {{ session.username }}</h1>
         </div>
         <div class="user-profile d-flex align-items-center">
             <img src="{{ url_for('static', filename='img/avatar.jpg') }}" class="avatar me-2" alt="User">
@@ -18,14 +15,14 @@
 
     <!-- Main Content -->
     <div class="row g-4">
-        <!-- Workspace Card -->
+        <!-- Workspace Card - DYNAMIC DATA ✅ -->
         <div class="col-lg-8">
             <div class="workspace-card card border-0 shadow-lg h-100">
                 <div class="card-body p-4">
                     <div class="d-flex justify-content-between align-items-start mb-4">
                         <div>
                             <h2 class="h4 fw-bold mb-1">Workspace</h2>
-                            <p class="text-muted mb-0">ID: {{ tenant_id or '6787' }}</p>
+                            <p class="text-muted mb-0">ID: {{ tenant_id }}</p>
                         </div>
                         <span class="badge bg-success px-3 py-2">Active</span>
                     </div>
@@ -34,13 +31,13 @@
                         <div class="col-md-6">
                             <div class="info-item">
                                 <span class="label">Company name</span>
-                                <span class="value fw-semibold">Virge Cybersecurity</span>
+                                <span class="value fw-semibold">{{ company_name }}</span>
                             </div>
                         </div>
                         <div class="col-md-6">
                             <div class="info-item">
                                 <span class="label">Onboarding date</span>
-                                <span class="value">05/12/2025</span>
+                                <span class="value">{{ onboarding_date }}</span>
                             </div>
                         </div>
                     </div>
@@ -48,17 +45,14 @@
                     <div class="row g-3">
                         <div class="col-md-6">
                             <div class="info-item">
-                                <span class="label">Backups</span>
-                                <span class="value">
-                                    <i class="fas fa-clock me-1 text-success"></i>
-                                    Daily @ 23:59
-                                </span>
+                                <span class="label">Total Users</span>
+                                <span class="value">{{ stats.total_users or 0 }}</span>
                             </div>
                         </div>
                         <div class="col-md-6">
                             <div class="info-item">
-                                <span class="label">Last success</span>
-                                <span class="value text-success">12/12/2025</span>
+                                <span class="label">Documents</span>
+                                <span class="value">{{ stats.total_documents or 0 }}</span>
                             </div>
                         </div>
                     </div>
@@ -66,7 +60,7 @@
             </div>
         </div>
 
-        <!-- Security Baselines Card -->
+        <!-- Security Baselines Card - DYNAMIC ✅ -->
         <div class="col-lg-4">
             <div class="security-card card border-0 shadow-lg h-100">
                 <div class="card-body p-4">
@@ -74,35 +68,39 @@
 
                     <div class="security-toggle mb-3">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span>MFA Enabled</span>
+                            <span>MFA</span>
                             <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" checked>
+                                <input class="form-check-input" type="checkbox"
+                                       {% if security_status.mfa_enabled %}checked{% endif %}>
                             </div>
                         </div>
                     </div>
 
                     <div class="security-toggle mb-3">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span>DLP Enabled</span>
-                            <span class="badge bg-success">3 Rules</span>
+                            <span>DLP</span>
+                            <span class="badge bg-success">{{ security_status.dlp_rule_count }} Rules</span>
                         </div>
                         <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" checked>
+                            <input class="form-check-input" type="checkbox"
+                                   {% if security_status.dlp_enabled %}checked{% endif %}>
                         </div>
                     </div>
 
                     <div class="security-toggle">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span>Data Retention</span>
-                            <span class="badge bg-info">3 Years</span>
+                            <span>Retention</span>
+                            <span class="badge bg-info">{{ security_status.retention_days // 365 }} Years</span>
                         </div>
                         <div class="form-check form-switch">
                             <input class="form-check-input" type="checkbox" checked>
                         </div>
                     </div>
 
+                    <!-- ✅ LINK TO YOUR SECURITY FORM -->
                     <div class="mt-4">
-                        <a href="#" class="btn btn-primary w-100">
+                        <a href="{{ url_for('tenant_security_baselines', tenant_id=tenant_id) }}"
+                           class="btn btn-primary w-100">
                             <i class="fas fa-edit me-2"></i>Edit Security Baselines
                         </a>
                     </div>
@@ -111,51 +109,40 @@
         </div>
     </div>
 
-    <!-- Navigation Sidebar -->
-    <div class="sidebar bg-dark bg-opacity-90 p-4 rounded-3">
-        <div class="sidebar-nav">
-            <a href="#" class="nav-item active">
-                <i class="fas fa-tachometer-alt me-3"></i>Overview
-            </a>
-            <a href="#" class="nav-item">
-                <i class="fas fa-users-cog me-3"></i>Roles & Users
-            </a>
-            <a href="#" class="nav-item">
-                <i class="fas fa-file-alt me-3"></i>Documents
-            </a>
-            <a href="#" class="nav-item">
-                <i class="fas fa-shield-alt me-3"></i>Security & Compliance
-            </a>
-            <a href="#" class="nav-item">
-                <i class="fas fa-database me-3"></i>Backups & Recovery
-            </a>
-            <a href="#" class="nav-item">
-                <i class="fas fa-cog me-3"></i>Tenant Settings
-            </a>
-        </div>
-    </div>
-
-    <!-- Usage Charts (Placeholder) -->
+    <!-- Stats Cards -->
     <div class="row g-4 mt-4">
-        <div class="col-12">
-            <div class="chart-card card border-0 shadow-lg">
-                <div class="card-body p-4">
-                    <div class="d-flex justify-content-between align-items-center mb-4">
-                        <h3 class="h5 fw-bold mb-0">Dashboard visualization of usage</h3>
-                        <select class="form-select form-select-sm" style="width: auto;">
-                            <option>Last 30 days</option>
-                        </select>
-                    </div>
-                    <div class="chart-placeholder">
-                        <!-- Chart will be here -->
-                        <canvas id="usageChart" height="100"></canvas>
-                    </div>
-                </div>
+        <div class="col-md-3">
+            <div class="stat-card card border-0 shadow-lg text-center p-4">
+                <i class="fas fa-users fa-3x text-primary mb-3"></i>
+                <h3 class="h2 fw-bold">{{ stats.total_users or 0 }}</h3>
+                <p class="text-muted mb-0">Users</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card card border-0 shadow-lg text-center p-4">
+                <i class="fas fa-file-alt fa-3x text-success mb-3"></i>
+                <h3 class="h2 fw-bold">{{ stats.total_documents or 0 }}</h3>
+                <p class="text-muted mb-0">Documents</p>
             </div>
         </div>
     </div>
+
+    <!-- Add to your stats cards section -->
+    <div class="col-md-3">
+        <div class="stat-card card border-0 shadow-lg text-center p-4">
+            <i class="fas fa-trash fa-3x text-danger mb-3"></i>
+            <h3 class="h2 fw-bold">{{ stats.cleaned_today or 0 }} deleted</h3>
+            <p class="text-muted mb-0">Retention Cleanup</p>
+            <a href="{{ url_for('run_retention_cleanup', tenant_id=tenant_id) }}"
+               class="btn btn-outline-danger btn-sm mt-2" onclick="return confirm('Run cleanup now?')">
+                Clean Now
+            </a>
+        </div>
+    </div>
+
 </div>
 
+<!-- Keep your existing CSS + Chart.js script -->
 <style>
 .admin-dashboard {
     background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
@@ -220,6 +207,35 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
+
+.stat-card {
+    background: rgba(255, 255, 255, 0.12) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    backdrop-filter: blur(20px) !important;
+    border-radius: 20px !important;
+    color: white !important;
+    transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 25px 50px rgba(0,0,0,0.2) !important;
+}
+
+.stat-card h3 {
+    color: white !important;
+    font-weight: 700 !important;
+}
+
+.stat-card p {
+    color: rgba(255,255,255,0.8) !important;
+    font-weight: 500 !important;
+}
+
+.text-primary { color: #4dabf7 !important; }
+.text-success { color: #51cf66 !important; }
+.text-muted { color: rgba(255,255,255,0.7) !important; }
+
 
 .avatar {
     width: 40px;

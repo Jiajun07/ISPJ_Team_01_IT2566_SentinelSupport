@@ -9,7 +9,9 @@ from flask import Flask, g, render_template, request, redirect, url_for, send_fr
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
-from database import db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin, TenantSecurity, apply_rls_policies, authenticate_user, find_user_by_email, get_verification_code, mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code
+from database import (db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin,
+                      TenantSecurity, apply_rls_policies, authenticate_user, find_user_by_email, get_verification_code,
+                      mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code, retention_cleanup)
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm, SecurityBaselineForm
@@ -1784,6 +1786,43 @@ def download_file(filename):
 
 #TODO JiaJun stuff -------------------------------------------------------------------------
 
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+
+@app.route('/tenant/<int:tenant_id>/cleanup-retention')
+def run_retention_cleanup(tenant_id):
+    if session.get('tenant_id') != tenant_id:
+        return redirect(url_for('login'))
+
+    # ✅ Now returns dict with logs/docs
+    deleted = retention_cleanup(tenant_id)
+    flash(f"✅ Cleanup complete: {deleted['logs']} logs, {deleted['docs']} docs deleted", "success")
+    return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+
+
+def daily_retention_cleanup():
+    """Run retention cleanup for all tenants daily"""
+    tenants = Tenant.query.all()
+    for tenant in tenants:
+        try:
+            retention_cleanup(tenant.id)
+        except Exception as e:
+            print(f"❌ Cleanup failed for tenant_{tenant.id}: {e}")
+
+# Schedule daily at 2AM
+scheduler.add_job(
+    daily_retention_cleanup,
+    'cron',
+    hour=2, minute=0,
+    id='retention_cleanup',
+    replace_existing=True
+)
+
+# Shutdown scheduler when app exits
+atexit.register(lambda: scheduler.shutdown())
+
+
 def get_tenant_session():
     """Get session with search_path set to tenant schema"""
     if "tenant_session" not in g:
@@ -1832,7 +1871,7 @@ def company_signup():
             # 2. Create schema
             db.session.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
 
-            # 3. Create tables - RAW STRINGS (no %s binding)
+            # 3. Create tables - YOUR EXISTING CODE (unchanged)
             db.session.execute(text(f'''
                 CREATE TABLE IF NOT EXISTS "{schema_name}".users (
                     id SERIAL PRIMARY KEY,
@@ -1866,12 +1905,11 @@ def company_signup():
                 )
             '''))
 
-            # 4. Create admin user - RAW STRING (no parameters)
+            # 4. Create admin user - YOUR EXISTING CODE (unchanged)
             import bcrypt
             password_hash = bcrypt.hashpw(form.password.data.encode(), bcrypt.gensalt()).decode()
             email = form.email.data
 
-            # ✅ RAW STRING - NO BINDING
             db.session.execute(text(f'''
                 INSERT INTO "{schema_name}".users (email, password_hash, role) 
                 VALUES ('{email}', '{password_hash}', 'admin')
@@ -1880,7 +1918,23 @@ def company_signup():
             db.session.commit()
             print(f"✅ tenant_{tenant_id} FULLY created with ALL tables!")
 
-            flash(f"✅ '{form.company_name.data}' created successfully!", "success")
+            # 🔥 NEW: ADD SECURITY BASELINE (INSERT THESE 12 LINES)
+            security = TenantSecurity(
+                tenant_id=tenant_id,
+                mfa_enabled=True,
+                dlp_enabled=True,
+                dlp_rule_count=3,
+                data_retention_days=365,
+                rls_enabled=True
+            )
+            db.session.add(security)
+            db.session.commit()
+
+            # Auto-apply RLS policies
+            apply_rls_policies(tenant_id, security)
+            print(f"✅ Security baseline + RLS applied to tenant_{tenant_id}")
+
+            flash(f"✅ '{form.company_name.data}' created with security baselines!", "success")
             return redirect(url_for('login'))
 
         except Exception as e:
@@ -1897,14 +1951,48 @@ def tenant_dashboard(tenant_id):
         flash("Access denied.", "danger")
         return redirect(url_for('login'))
 
-    # Load tenant-specific data
-    tenant_stats = get_tenant_stats(tenant_id)
-    tenant = db.session.execute(text("SELECT * FROM tenants WHERE id = :id"),
-                                {"id": tenant_id}).first()
+    # ✅ DYNAMIC TENANT DATA
+    tenant = db.session.execute(
+        text("SELECT * FROM tenants WHERE id = :id"), {"id": tenant_id}
+    ).first()
+
+    if not tenant:
+        flash("Tenant not found.", "danger")
+        return redirect(url_for('login'))
+
+    # Company name, onboarding date, etc.
+    company_name = tenant.company_name
+    onboarding_date = tenant.created_at.strftime('%d/%m/%Y') if tenant.created_at else 'N/A'
+
+    # Security baselines (from our new table)
+    security = db.session.execute(
+        text("SELECT * FROM tenant_security WHERE tenant_id = :id"), {"id": tenant_id}
+    ).first()
+
+    security_status = {
+        'mfa_enabled': security.mfa_enabled if security else False,
+        'dlp_enabled': security.dlp_enabled if security else False,
+        'dlp_rule_count': security.dlp_rule_count if security else 0,
+        'retention_days': security.data_retention_days if security else 365
+    }
+
+    # Tenant stats (users, documents, etc.)
+    tenant_stats = {
+        'total_users': db.session.execute(
+            text(f'SELECT COUNT(*) FROM "tenant_{tenant_id}".users')
+        ).scalar(),
+        'total_documents': db.session.execute(
+            text(f'SELECT COUNT(*) FROM "tenant_{tenant_id}".documents')
+        ).scalar(),
+        'backups': get_last_backup(tenant_id)  # Your existing function
+    }
 
     return render_template('CompanyAdmin/dashboard.html',
                            tenant_id=tenant_id,
                            tenant=tenant,
+                           company_name=company_name,
+                           onboarding_date=onboarding_date,
+                           security_status=security_status,
                            stats=tenant_stats)
 
 
@@ -2023,7 +2111,7 @@ def tenant_security_baselines(tenant_id):
         flash("✅ Security baselines applied successfully!", "success")
         return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
 
-    return render_template('admin/security_baselines.html', form=form, tenant_id=tenant_id)
+    return render_template('CompanyAdmin/security_baselines.html', form=form, tenant_id=tenant_id)
 
 
 #TODO tristan stuff -------------------------------------------------------------------------

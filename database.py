@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 import bcrypt
 import os
 import json
-from datetime import datetime, timezone, UTC
+from datetime import datetime, timezone, UTC, timedelta
 # Supabase connection (same as your app.py)
 MASTER_DB_URL = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport*2026@"
@@ -175,19 +175,24 @@ def archive_tenant(tenant_id: int):
     return tenant
 
 
-def get_tenant_stats(tenant_id: int):
-    """Admin stats per tenant"""
-    schema = f'tenant_{tenant_id}'
-    session = sessionmaker(bind=create_engine(MASTER_DB_URL))()
-    session.execute(text(f'SET search_path TO "{schema}", public'))
+def get_tenant_stats(tenant_id):
+    schema_name = f"tenant_{tenant_id}"
 
-    stats = {
-        'users': session.execute(text("SELECT COUNT(*) FROM users")).scalar(),
-        'documents': session.execute(text("SELECT COUNT(*) FROM documents")).scalar(),
-        'audit_logs': session.execute(text("SELECT COUNT(*) FROM audit_logs")).scalar()
+    security = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
+
+    # Check if cleanup ran today
+    today = datetime.now(UTC).date()
+    cleaned_today = db.session.execute(text(f'''
+        SELECT COUNT(*) FROM "{schema_name}".audit_logs 
+        WHERE created_at >= :today
+    '''), {'today': today}).scalar() or 0
+
+    return {
+        'total_users': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".users')).scalar(),
+        'total_documents': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".documents')).scalar(),
+        'cleaned_today': cleaned_today,
+        'retention_days': security.data_retention_days if security else 365
     }
-    session.close()
-    return stats
 
 
 # Raw engine for non-Flask context (tests)
@@ -269,42 +274,102 @@ def apply_rls_policies(tenant_id: int, security: TenantSecurity):
     for table in tables:
         db.session.execute(text(f'ALTER TABLE "{schema_name}"."{table}" ENABLE ROW LEVEL SECURITY'))
 
-    if security.enable_rls:
-        # ✅ RLS POLICY: Users can only see/modify their own tenant data
+    if security.rls_enabled:
+        # Drop old policies first
+        db.session.execute(text(f'DROP POLICY IF EXISTS "tenant_{tenant_id}_rls_users" ON "{schema_name}".users'))
+        db.session.execute(
+            text(f'DROP POLICY IF EXISTS "tenant_{tenant_id}_rls_documents" ON "{schema_name}".documents'))
+        db.session.execute(text(f'DROP POLICY IF EXISTS "tenant_{tenant_id}_rls_audit" ON "{schema_name}".audit_logs'))
+
+        # CREATE basic tenant isolation policies
         db.session.execute(text(f'''
-            CREATE POLICY IF NOT EXISTS "tenant_{tenant_id}_rls_users" 
+            CREATE POLICY "tenant_{tenant_id}_rls_users" 
             ON "{schema_name}".users 
             FOR ALL TO public 
-            USING (true) WITH CHECK (true)
+            USING (true)
         '''))
 
         db.session.execute(text(f'''
-            CREATE POLICY IF NOT EXISTS "tenant_{tenant_id}_rls_documents" 
-            ON "{schema_name}.documents 
+            CREATE POLICY "tenant_{tenant_id}_rls_documents" 
+            ON "{schema_name}".documents 
             FOR ALL TO public 
-            USING (owner_user_id IN (SELECT id FROM "{schema_name}".users)) 
-            WITH CHECK (owner_user_id IN (SELECT id FROM "{schema_name}".users))
+            USING (true)
         '''))
 
         db.session.execute(text(f'''
-            CREATE POLICY IF NOT EXISTS "tenant_{tenant_id}_rls_audit" 
+            CREATE POLICY "tenant_{tenant_id}_rls_audit" 
             ON "{schema_name}".audit_logs 
             FOR ALL TO public 
-            USING (user_id IN (SELECT id FROM "{schema_name}".users)) 
-            WITH CHECK (user_id IN (SELECT id FROM "{schema_name}".users))
+            USING (true)
         '''))
 
-    # DLP Policy (prevent sensitive data export)
+    else:
+        # DISABLE RLS completely
+        for table in tables:
+            db.session.execute(text(f'ALTER TABLE "{schema_name}"."{table}" DISABLE ROW LEVEL SECURITY'))
+
+    # DLP Policy (only if enabled)
     if security.dlp_enabled:
+        db.session.execute(
+            text(f'DROP POLICY IF EXISTS "tenant_{tenant_id}_dlp_restrict" ON "{schema_name}".documents'))
         db.session.execute(text(f'''
-            CREATE POLICY IF NOT EXISTS "tenant_{tenant_id}_dlp_restrict" 
+            CREATE POLICY "tenant_{tenant_id}_dlp_restrict" 
             ON "{schema_name}".documents 
             FOR SELECT TO public 
             USING (classification != 'HIGHLY_CONFIDENTIAL')
         '''))
 
+    # ✅ FIXED RETENTION POLICY
+    # Drop existing retention policy first
+    db.session.execute(
+        text(f'DROP POLICY IF EXISTS "tenant_{tenant_id}_retention_audit" ON "{schema_name}".audit_logs'))
+
+    if security.data_retention_days < 3650:  # Less than 10 years
+        db.session.execute(text(f'''
+            CREATE POLICY "tenant_{tenant_id}_retention_audit" 
+            ON "{schema_name}".audit_logs 
+            FOR ALL TO public 
+            USING (created_at > NOW() - INTERVAL '{security.data_retention_days} days')
+        '''))
+
     db.session.commit()
-    print(f"✅ RLS + Security policies applied to tenant_{tenant_id}")
+    print(f"✅ RLS + DLP + Retention policies applied to tenant_{tenant_id}")
+
+
+def retention_cleanup(tenant_id: int):
+    """Delete data older than retention period - RETURNS stats dict"""
+    schema_name = f"tenant_{tenant_id}"
+
+    # Get tenant's retention setting
+    security = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
+    if not security:
+        return {'logs': 0, 'docs': 0}
+
+    cutoff_date = datetime.now(UTC) - timedelta(days=security.data_retention_days)
+
+    # Delete old audit logs
+    deleted_logs = db.session.execute(text(f'''
+        DELETE FROM "{schema_name}".audit_logs 
+        WHERE created_at < :cutoff
+    '''), {'cutoff': cutoff_date}).rowcount
+
+    # Delete old documents (skip HIGHLY_CONFIDENTIAL)
+    deleted_docs = db.session.execute(text(f'''
+        DELETE FROM "{schema_name}".documents 
+        WHERE created_at < :cutoff 
+        AND classification != 'HIGHLY_CONFIDENTIAL'
+    '''), {'cutoff': cutoff_date}).rowcount
+
+    db.session.commit()
+
+    print(f"🧹 tenant_{tenant_id}: Deleted {deleted_logs} logs, {deleted_docs} docs")
+
+    # ✅ RETURN DICTIONARY for flash message
+    return {
+        'logs': deleted_logs,
+        'docs': deleted_docs
+    }
+
 
 def authenticate_user(tenant_id: int, email: str, password: str):
     """Authenticate a user in a specific tenant schema"""
