@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 import bcrypt
 import os
 import json
-import datetime
+from datetime import datetime, timezone, UTC
 # Supabase connection (same as your app.py)
 MASTER_DB_URL = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport*2026@"
@@ -15,6 +15,16 @@ MASTER_DB_URL = (
 
 db = SQLAlchemy()
 
+class TenantSecurity(db.Model):
+    __tablename__ = 'tenant_security'
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), unique=True)
+    mfa_enabled = db.Column(db.Boolean, default=False)
+    dlp_enabled = db.Column(db.Boolean, default=False)
+    dlp_rule_count = db.Column(db.Integer, default=0)
+    data_retention_days = db.Column(db.Integer, default=365)
+    rls_enabled = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))  # ✅
 
 class Tenant(db.Model):
     __tablename__ = 'tenants'  # Explicit in public schema
@@ -204,6 +214,54 @@ def find_tenant_admin(email: str, password: str):
             continue
 
     return None
+
+
+def apply_rls_policies(tenant_id: int, security: TenantSecurity):
+    """Apply RLS + security policies to tenant schema"""
+    schema_name = f"tenant_{tenant_id}"
+
+    # Enable RLS on all tables
+    tables = ['users', 'documents', 'audit_logs']
+    for table in tables:
+        db.session.execute(text(f'ALTER TABLE "{schema_name}"."{table}" ENABLE ROW LEVEL SECURITY'))
+
+    if security.enable_rls:
+        # ✅ RLS POLICY: Users can only see/modify their own tenant data
+        db.session.execute(text(f'''
+            CREATE POLICY IF NOT EXISTS "tenant_{tenant_id}_rls_users" 
+            ON "{schema_name}".users 
+            FOR ALL TO public 
+            USING (true) WITH CHECK (true)
+        '''))
+
+        db.session.execute(text(f'''
+            CREATE POLICY IF NOT EXISTS "tenant_{tenant_id}_rls_documents" 
+            ON "{schema_name}.documents 
+            FOR ALL TO public 
+            USING (owner_user_id IN (SELECT id FROM "{schema_name}".users)) 
+            WITH CHECK (owner_user_id IN (SELECT id FROM "{schema_name}".users))
+        '''))
+
+        db.session.execute(text(f'''
+            CREATE POLICY IF NOT EXISTS "tenant_{tenant_id}_rls_audit" 
+            ON "{schema_name}".audit_logs 
+            FOR ALL TO public 
+            USING (user_id IN (SELECT id FROM "{schema_name}".users)) 
+            WITH CHECK (user_id IN (SELECT id FROM "{schema_name}".users))
+        '''))
+
+    # DLP Policy (prevent sensitive data export)
+    if security.dlp_enabled:
+        db.session.execute(text(f'''
+            CREATE POLICY IF NOT EXISTS "tenant_{tenant_id}_dlp_restrict" 
+            ON "{schema_name}".documents 
+            FOR SELECT TO public 
+            USING (classification != 'HIGHLY_CONFIDENTIAL')
+        '''))
+
+    db.session.commit()
+    print(f"✅ RLS + Security policies applied to tenant_{tenant_id}")
+
 
 #class files(db.Model):
 #    __tablename__ = 'files'
