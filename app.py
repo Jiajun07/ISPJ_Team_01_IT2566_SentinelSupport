@@ -1,9 +1,10 @@
 # app.py
 import os
 import hashlib
+import base64
 import secrets
 from dotenv import load_dotenv
-from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash
+from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash, flash, current_app
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
@@ -27,6 +28,9 @@ import subprocess
 from forms import BackupRecoveryForm
 import zipfile
 import shutil
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
@@ -112,6 +116,7 @@ app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads")
 app.config['PENDING_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads_pending")
 app.config['VERSIONS_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads", "versions")
 VERSIONS_JSON = os.path.join(os.path.dirname(__file__), "file_versions.json")
+FILE_METADATA_JSON = os.path.join(os.path.dirname(__file__), "file_metadata.json")
 ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "png", "jpg", "jpeg", "txt"}
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['PENDING_FOLDER'], exist_ok=True)
@@ -145,6 +150,46 @@ def save_versions(versions):
     """Save version history to JSON file."""
     with open(VERSIONS_JSON, 'w') as f:
         json.dump(versions, f, indent=2)
+
+
+def load_file_metadata():
+    if not os.path.exists(FILE_METADATA_JSON):
+        return {}
+    try:
+        with open(FILE_METADATA_JSON, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_file_metadata(metadata):
+    with open(FILE_METADATA_JSON, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2)
+
+
+def set_file_metadata(filename, tenant_id, metadata):
+    all_metadata = load_file_metadata()
+    tenant_key = f"tenant_{tenant_id}"
+    if tenant_key not in all_metadata:
+        all_metadata[tenant_key] = {}
+    all_metadata[tenant_key][filename] = metadata
+    save_file_metadata(all_metadata)
+
+
+def get_file_metadata(filename, tenant_id):
+    all_metadata = load_file_metadata()
+    tenant_key = f"tenant_{tenant_id}"
+    return all_metadata.get(tenant_key, {}).get(filename, {})
+
+
+def rename_file_metadata(old_name, new_name, tenant_id):
+    all_metadata = load_file_metadata()
+    tenant_key = f"tenant_{tenant_id}"
+    tenant_meta = all_metadata.get(tenant_key, {})
+    if old_name in tenant_meta:
+        tenant_meta[new_name] = tenant_meta.pop(old_name)
+        all_metadata[tenant_key] = tenant_meta
+        save_file_metadata(all_metadata)
 
 
 def add_version(filename, version_info, tenant_id=None):
@@ -218,6 +263,7 @@ def get_uploaded_files():
         for fname in sorted(os.listdir(tenant_folder)):
             fpath = os.path.join(tenant_folder, fname)
             if os.path.isfile(fpath):
+                metadata = get_file_metadata(fname, tenant_id)
                 files.append(
                     {
                         "name": fname,
@@ -226,7 +272,7 @@ def get_uploaded_files():
                         "hash": compute_sha256(fpath),
                         "owner": account_info['owner'],
                         "modified": datetime.fromtimestamp(os.path.getmtime(fpath)).strftime('%d %B %Y'),
-                        "sensitivity": "Confidential"
+                        "sensitivity": metadata.get("sensitivity") or "Unclassified"
                     }
                 )
     return files
@@ -254,7 +300,7 @@ def myfiles():
     tenant_id = get_current_tenant()
     account_info = DUMMY_ACCOUNTS.get(tenant_id, {'name': 'Unknown'})
     files = get_uploaded_files()
-    return render_template("myfiles.html", files=files, tenant_id=tenant_id, account_name=account_info['name'])
+    return render_template("users/myfiles.html", files=files, tenant_id=tenant_id, account_name=account_info['name'])
 
 
 @app.route('/shared-with-me', methods=['GET'])
@@ -264,15 +310,50 @@ def shared_with_me():
     
     # Load received shares for this tenant
     received_shares = load_received_shares()
-    tenant_shares = received_shares.get(f'tenant_{tenant_id}', [])
+    tenant_key = f'tenant_{tenant_id}'
+    tenant_shares = received_shares.get(tenant_key, [])
+
+    # Prune entries that no longer exist on disk and hide unverified exchanges
+    key_exchanges = load_key_exchanges()
+    pruned_shares = []
+    changed = False
+    for entry in tenant_shares:
+        filename = entry.get('name')
+        owner_tenant_id = str(entry.get('owner_tenant_id') or '')
+        if not filename or not owner_tenant_id:
+            changed = True
+            continue
+        owner_folder = get_tenant_upload_folder(owner_tenant_id)
+        file_path = os.path.join(owner_folder, filename)
+        version_path = os.path.join(app.config['VERSIONS_FOLDER'], filename)
+        if not (os.path.exists(file_path) or os.path.exists(version_path)):
+            changed = True
+            continue
+
+        if entry.get('require_key_exchange') and entry.get('exchange_id'):
+            exchange = key_exchanges.get(entry.get('exchange_id'))
+            status = exchange.get('status') if exchange else 'pending'
+            entry['verification_status'] = status
+            if status != 'verified':
+                changed = True
+                continue
+
+        pruned_shares.append(entry)
+
+    if changed:
+        received_shares[tenant_key] = pruned_shares
+        save_received_shares(received_shares)
+        tenant_shares = pruned_shares
     
-    return render_template("shared_with_me.html", files=tenant_shares, tenant_id=tenant_id, account_name=account_info['name'])
+    return render_template("users/shared_with_me.html", files=tenant_shares, tenant_id=tenant_id, account_name=account_info['name'])
 
 
 # Share link storage (in production, use database)
 SHARE_LINKS_FILE = os.path.join(os.path.dirname(__file__), "share_links.json")
 SHARE_LINKS_LOG = os.path.join(os.path.dirname(__file__), "share_links_log.txt")
 RECEIVED_SHARES_FILE = os.path.join(os.path.dirname(__file__), "received_shares.json")
+KEY_EXCHANGE_JSON = os.path.join(os.path.dirname(__file__), "key_exchanges.json")
+USER_KEYS_JSON = os.path.join(os.path.dirname(__file__), "user_keys.json")
 
 def load_received_shares():
     """Load received shares from JSON file"""
@@ -305,6 +386,179 @@ def save_share_links(links):
         json.dump(links, f, indent=2)
 
 
+def add_verified_share_to_recipient(exchange_id, exchange):
+    """Ensure verified exchange shows in recipient's shared list."""
+    try:
+        recipient_tenant = str(exchange.get('recipient_tenant') or '')
+        if not recipient_tenant or recipient_tenant == 'pending':
+            return
+
+        share_links = load_share_links()
+        token = None
+        link_info = None
+        for share_token, info in share_links.items():
+            if info.get('exchange_id') == exchange_id:
+                token = share_token
+                link_info = info
+                break
+        if not token or not link_info:
+            return
+
+        filename = link_info.get('filename') or exchange.get('filename')
+        owner_tenant_id = str(link_info.get('tenant_id') or '')
+        if not filename or not owner_tenant_id:
+            return
+
+        owner_folder = get_tenant_upload_folder(owner_tenant_id)
+        file_path = os.path.join(owner_folder, filename)
+        version_path = os.path.join(app.config['VERSIONS_FOLDER'], filename)
+        source_path = file_path if os.path.exists(file_path) else version_path if os.path.exists(version_path) else None
+        if not source_path:
+            return
+
+        file_stats = os.stat(source_path)
+        file_info = {
+            'name': filename,
+            'size': file_stats.st_size,
+            'modified': datetime.fromtimestamp(file_stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+            'owner': link_info.get('owner', 'Unknown'),
+            'sensitivity': 'Shared',
+            'url': f"/download/shared/{filename}?share={token}&tenant={owner_tenant_id}",
+            'share_token': token,
+            'owner_tenant_id': owner_tenant_id,
+            'require_key_exchange': True,
+            'exchange_id': exchange_id,
+            'verification_status': 'verified'
+        }
+
+        received_shares = load_received_shares()
+        recipient_key = f'tenant_{recipient_tenant}'
+        if recipient_key not in received_shares:
+            received_shares[recipient_key] = []
+
+        existing = next((f for f in received_shares[recipient_key] if f.get('share_token') == token), None)
+        if not existing:
+            file_info['date_shared'] = datetime.now().strftime('%Y-%m-%d')
+            received_shares[recipient_key].append(file_info)
+        else:
+            existing.update(file_info)
+
+        save_received_shares(received_shares)
+    except Exception:
+        return
+
+
+def load_user_keys():
+    """Load user keys from JSON"""
+    if not os.path.exists(USER_KEYS_JSON):
+        return {}
+    try:
+        with open(USER_KEYS_JSON, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_user_keys(keys):
+    """Save user keys to JSON"""
+    with open(USER_KEYS_JSON, 'w', encoding='utf-8') as f:
+        json.dump(keys, f, indent=2)
+
+
+def generate_user_keypair(user_id, tenant_id):
+    """Generate RSA keypair for a user"""
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+        backend=default_backend()
+    )
+
+    public_key_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode('utf-8')
+
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption()
+    ).decode('utf-8')
+
+    user_keys = load_user_keys()
+    key_id = f"tenant_{tenant_id}/{user_id}"
+    user_keys[key_id] = {
+        "public_key": public_key_pem,
+        "private_key": private_key_pem,
+        "created": datetime.now().isoformat()
+    }
+    save_user_keys(user_keys)
+
+    return public_key_pem
+
+
+def get_or_create_user_key(user_id, tenant_id):
+    """Get user's public key or create if not exists"""
+    user_keys = load_user_keys()
+    key_id = f"tenant_{tenant_id}/{user_id}"
+
+    if key_id not in user_keys:
+        return generate_user_keypair(user_id, tenant_id)
+
+    return user_keys[key_id].get("public_key")
+
+
+def load_key_exchanges():
+    """Load key exchanges from JSON"""
+    if not os.path.exists(KEY_EXCHANGE_JSON):
+        return {}
+    try:
+        with open(KEY_EXCHANGE_JSON, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_key_exchanges(exchanges):
+    """Save key exchanges to JSON"""
+    with open(KEY_EXCHANGE_JSON, 'w', encoding='utf-8') as f:
+        json.dump(exchanges, f, indent=2)
+
+
+def generate_fingerprint(public_key_pem):
+    """Generate a human-readable fingerprint from public key"""
+    if not public_key_pem:
+        return None
+    key_hash = hashlib.sha256(public_key_pem.encode()).digest()
+    fingerprint = base64.b64encode(key_hash).decode()[:16]
+    return fingerprint.upper()
+
+
+def create_key_exchange(sharer_id, sharer_tenant, recipient_email, filename, recipient_tenant):
+    """Create a key exchange request"""
+    exchange_id = secrets.token_urlsafe(32)
+    sharer_public_key = get_or_create_user_key(sharer_id, sharer_tenant)
+
+    key_exchanges = load_key_exchanges()
+    key_exchanges[exchange_id] = {
+        "exchange_id": exchange_id,
+        "sharer_id": sharer_id,
+        "sharer_tenant": sharer_tenant,
+        "sharer_public_key": sharer_public_key,
+        "recipient_email": recipient_email,
+        "recipient_tenant": recipient_tenant,
+        "filename": filename,
+        "status": "pending",
+        "created": datetime.now().isoformat(),
+        "recipient_verified": False,
+        "sharer_verified": False,
+        "recipient_confirmed": False,
+        "recipient_public_key": None
+    }
+    save_key_exchanges(key_exchanges)
+
+    return exchange_id, sharer_public_key
+
+
 def log_share_link(share_token, filename, owner, tenant_id, base_url, has_password=False):
     """Log share link generation to text file"""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -335,9 +589,15 @@ def generate_share_link():
         filename = data.get('filename')
         tenant_id = data.get('tenant', get_current_tenant())
         password = data.get('password')
+        require_key_exchange = bool(data.get('require_key_exchange'))
+        exchange_id = data.get('exchange_id')
+        recipient_email = data.get('recipient_email')
         
         if not filename:
             return jsonify({'error': 'Filename required'}), 400
+
+        if require_key_exchange and not exchange_id:
+            return jsonify({'error': 'Key exchange required but exchange ID missing'}), 400
         
         # Generate a secure random token
         share_token = secrets.token_urlsafe(32)
@@ -354,7 +614,10 @@ def generate_share_link():
             'tenant_id': tenant_id,
             'created_at': datetime.now().isoformat(),
             'owner': owner,
-            'password': generate_password_hash(password) if password else None
+            'password': generate_password_hash(password) if password else None,
+            'require_key_exchange': require_key_exchange,
+            'exchange_id': exchange_id,
+            'recipient_email': recipient_email
         }
         
         # Save to file
@@ -373,6 +636,214 @@ def generate_share_link():
             'token': share_token
         })
         
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@csrf.exempt
+@app.route('/initiate_key_exchange', methods=['POST'])
+def initiate_key_exchange():
+    """Initiate a key exchange for secure file sharing"""
+    try:
+        data = request.json
+        filename = data.get('filename')
+        recipient_email = data.get('recipient_email')
+        tenant_id = data.get('tenant', get_current_tenant())
+        sharer_id = "You"
+
+        if not filename or not recipient_email:
+            return jsonify({'error': 'Missing filename or recipient email'}), 400
+
+        recipient_tenant = 'pending'
+
+        exchange_id, sharer_public_key = create_key_exchange(
+            sharer_id, tenant_id, recipient_email, filename, recipient_tenant
+        )
+
+        sharer_fingerprint = generate_fingerprint(sharer_public_key)
+
+        return jsonify({
+            'success': True,
+            'exchange_id': exchange_id,
+            'sharer_fingerprint': sharer_fingerprint
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@csrf.exempt
+@app.route('/get_pending_verifications', methods=['GET'])
+def get_pending_verifications():
+    """Get pending key exchange verifications for current user"""
+    try:
+        tenant_id = get_current_tenant()
+        key_exchanges = load_key_exchanges()
+
+        pending = []
+        for exchange_id, exchange in key_exchanges.items():
+            if exchange.get('status') == 'pending':
+                sharer_tenant = str(exchange.get('sharer_tenant', ''))
+                recipient_tenant = str(exchange.get('recipient_tenant', ''))
+
+                if str(tenant_id) == sharer_tenant or str(tenant_id) == recipient_tenant or recipient_tenant == 'pending':
+                    is_sharer = str(tenant_id) == sharer_tenant
+                    pending.append({
+                        'exchange_id': exchange_id,
+                        'filename': exchange.get('filename'),
+                        'sharer_id': exchange.get('sharer_id'),
+                        'recipient_email': exchange.get('recipient_email'),
+                        'sharer_fingerprint': generate_fingerprint(exchange.get('sharer_public_key', '')),
+                        'recipient_fingerprint': exchange.get('recipient_fingerprint', ''),
+                        'created': exchange.get('created'),
+                        'recipient_verified': exchange.get('recipient_verified', False),
+                        'sharer_verified': exchange.get('sharer_verified', False),
+                        'recipient_confirmed': exchange.get('recipient_confirmed', False),
+                        'is_sharer': is_sharer
+                    })
+
+        return jsonify({'success': True, 'pending_verifications': pending}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@csrf.exempt
+@app.route('/submit_recipient_key/<exchange_id>', methods=['POST'])
+def submit_recipient_key(exchange_id):
+    """Recipient submits their public key for the key exchange"""
+    try:
+        data = request.json
+        recipient_email = data.get('recipient_email')
+
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+            backend=default_backend()
+        )
+
+        public_key_pem = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode('utf-8')
+
+        recipient_fingerprint = generate_fingerprint(public_key_pem)
+
+        key_exchanges = load_key_exchanges()
+        if exchange_id not in key_exchanges:
+            return jsonify({'error': 'Exchange not found'}), 404
+
+        exchange = key_exchanges[exchange_id]
+        exchange['recipient_public_key'] = public_key_pem
+        exchange['recipient_email'] = recipient_email or exchange.get('recipient_email')
+        exchange['recipient_verified'] = True
+        exchange['recipient_fingerprint'] = recipient_fingerprint
+
+        save_key_exchanges(key_exchanges)
+
+        return jsonify({
+            'success': True,
+            'recipient_fingerprint': recipient_fingerprint,
+            'message': 'Your key has been generated. Share this fingerprint with the sharer.'
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@csrf.exempt
+@app.route('/verify_recipient_fingerprint/<exchange_id>', methods=['POST'])
+def verify_recipient_fingerprint(exchange_id):
+    """Sharer verifies recipient's fingerprint"""
+    try:
+        data = request.json
+        recipient_fingerprint = data.get('recipient_fingerprint')
+
+        key_exchanges = load_key_exchanges()
+        if exchange_id not in key_exchanges:
+            return jsonify({'error': 'Exchange not found'}), 404
+
+        exchange = key_exchanges[exchange_id]
+        actual_fingerprint = generate_fingerprint(exchange.get('recipient_public_key'))
+
+        if not actual_fingerprint:
+            return jsonify({'success': False, 'error': 'Recipient has not generated their key yet. Please ask them to generate their key first.'}), 400
+
+        if recipient_fingerprint != actual_fingerprint:
+            return jsonify({'success': False, 'error': 'Fingerprint mismatch!'}), 400
+
+        exchange['sharer_verified'] = True
+        if exchange.get('recipient_confirmed'):
+            exchange['status'] = 'verified'
+            add_verified_share_to_recipient(exchange_id, exchange)
+        save_key_exchanges(key_exchanges)
+
+        return jsonify({'success': True, 'message': 'Recipient identity verified.'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@csrf.exempt
+@app.route('/verify_sharer_fingerprint/<exchange_id>', methods=['POST'])
+def verify_sharer_fingerprint(exchange_id):
+    """Recipient verifies sharer's fingerprint"""
+    try:
+        data = request.json
+        sharer_fingerprint = data.get('sharer_fingerprint')
+
+        key_exchanges = load_key_exchanges()
+        if exchange_id not in key_exchanges:
+            return jsonify({'error': 'Exchange not found'}), 404
+
+        exchange = key_exchanges[exchange_id]
+        actual_fingerprint = generate_fingerprint(exchange.get('sharer_public_key'))
+
+        if not actual_fingerprint:
+            return jsonify({'success': False, 'error': 'Sharer public key not available. This should not happen.'}), 400
+
+        if sharer_fingerprint != actual_fingerprint:
+            return jsonify({'success': False, 'error': 'Fingerprint mismatch!'}), 400
+
+        exchange['recipient_confirmed'] = True
+        if exchange.get('sharer_verified'):
+            exchange['status'] = 'verified'
+            add_verified_share_to_recipient(exchange_id, exchange)
+        save_key_exchanges(key_exchanges)
+
+        return jsonify({'success': True, 'message': 'Sharer identity verified.'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/verify-identities', methods=['GET'])
+def verify_identities():
+    tenant_id = get_current_tenant()
+    account_info = DUMMY_ACCOUNTS.get(tenant_id, {'name': 'Unknown'})
+    return render_template('users/verify_identities.html', tenant_id=tenant_id, account_name=account_info['name'])
+
+
+@csrf.exempt
+@app.route('/clear_pending_verifications', methods=['POST'])
+def clear_pending_verifications():
+    """Clear all pending verifications for current tenant"""
+    try:
+        tenant_id = get_current_tenant()
+        key_exchanges = load_key_exchanges()
+        
+        # Filter out exchanges for this tenant (where tenant is sharer or recipient)
+        exchanges_to_remove = [
+            exchange_id for exchange_id, exchange in key_exchanges.items()
+            if exchange.get('sharer_tenant') == tenant_id or exchange.get('recipient_tenant') == tenant_id or exchange.get('recipient_tenant') == 'pending'
+        ]
+        
+        for exchange_id in exchanges_to_remove:
+            del key_exchanges[exchange_id]
+        
+        save_key_exchanges(key_exchanges)
+        return jsonify({'success': True, 'message': f'Cleared {len(exchanges_to_remove)} pending verification(s).'}), 200
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -417,6 +888,8 @@ def validate_share_link():
         
         filename = link_info['filename']
         file_tenant_id = link_info['tenant_id']
+        require_key_exchange = bool(link_info.get('require_key_exchange'))
+        exchange_id = link_info.get('exchange_id')
         
         # Get the actual file path
         tenant_folder = get_tenant_upload_folder(file_tenant_id)
@@ -424,6 +897,18 @@ def validate_share_link():
         
         if not os.path.exists(file_path):
             return jsonify({'error': 'File not found'}), 404
+
+        verification_status = 'not_required'
+        if require_key_exchange:
+            key_exchanges = load_key_exchanges()
+            if not exchange_id or exchange_id not in key_exchanges:
+                verification_status = 'exchange_not_found'
+            else:
+                exchange = key_exchanges[exchange_id]
+                if exchange.get('recipient_tenant') == 'pending':
+                    exchange['recipient_tenant'] = tenant_id
+                    save_key_exchanges(key_exchanges)
+                verification_status = 'verified' if exchange.get('status') == 'verified' else 'pending'
         
         # Get file info
         file_stats = os.stat(file_path)
@@ -433,9 +918,12 @@ def validate_share_link():
             'modified': datetime.fromtimestamp(file_stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
             'owner': link_info.get('owner', 'Unknown'),
             'sensitivity': 'Shared',
-            'url': f"/download/{filename}?tenant={file_tenant_id}",
+            'url': f"/download/shared/{filename}?share={share_token}&tenant={file_tenant_id}",
             'share_token': share_token,
-            'owner_tenant_id': file_tenant_id
+            'owner_tenant_id': file_tenant_id,
+            'require_key_exchange': require_key_exchange,
+            'exchange_id': exchange_id,
+            'verification_status': verification_status
         }
         
         # Get version history for this file
@@ -453,7 +941,14 @@ def validate_share_link():
             # Add date_shared to track when file was shared
             file_info['date_shared'] = datetime.now().strftime('%Y-%m-%d')
             received_shares[recipient_key].append(file_info)
-            save_received_shares(received_shares)
+        else:
+            existing.update({
+                'url': file_info['url'],
+                'require_key_exchange': file_info.get('require_key_exchange'),
+                'exchange_id': file_info.get('exchange_id'),
+                'verification_status': file_info.get('verification_status')
+            })
+        save_received_shares(received_shares)
         
         return jsonify({
             'success': True,
@@ -463,6 +958,51 @@ def validate_share_link():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@csrf.exempt
+@app.route('/download/shared/<path:filename>', methods=['GET'])
+def download_shared_file(filename):
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    share_token = request.args.get('share')
+    tenant_id = request.args.get('tenant', get_current_tenant())
+
+    if not share_token:
+        return "Missing share token", 400
+
+    share_links = load_share_links()
+    if share_token not in share_links:
+        return "Invalid or expired share link", 404
+
+    link_info = share_links[share_token]
+    if link_info.get('filename') != filename:
+        return "Share link does not match file", 403
+
+    owner_tenant_id = str(link_info.get('tenant_id'))
+    tenant_folder = get_tenant_upload_folder(owner_tenant_id)
+    file_path = os.path.join(tenant_folder, filename)
+    version_path = os.path.join(app.config['VERSIONS_FOLDER'], filename)
+    file_in_tenant = os.path.exists(file_path)
+    file_in_versions = os.path.exists(version_path)
+    if not file_in_tenant and not file_in_versions:
+        return "File not found", 404
+
+    if link_info.get('require_key_exchange'):
+        exchange_id = link_info.get('exchange_id')
+        key_exchanges = load_key_exchanges()
+        if not exchange_id or exchange_id not in key_exchanges:
+            return "Identity not verified", 403
+        exchange = key_exchanges[exchange_id]
+        if exchange.get('status') != 'verified':
+            return "Identity not verified", 403
+
+    source_path = file_path if file_in_tenant else version_path
+    actual_ext = detect_file_extension(source_path)
+    download_name = os.path.splitext(filename)[0] + actual_ext
+    if file_in_tenant:
+        return send_from_directory(tenant_folder, filename, as_attachment=True, download_name=download_name)
+    return send_from_directory(app.config['VERSIONS_FOLDER'], filename, as_attachment=True, download_name=download_name)
 
 
 @csrf.exempt
@@ -593,6 +1133,19 @@ def confirm_upload(temp_id):
         size_final = os.path.getsize(save_path)
         file_hash_final = compute_sha256(save_path)
         file_url = url_for('download_file', filename=target_safe, tenant=tenant_id)
+
+        sensitivity = (request.form.get('sensitivity') or '').strip()
+        owner = (request.form.get('owner') or 'You').strip()
+        notes = (request.form.get('notes') or '').strip()
+        risk_type = (request.form.get('risk_type') or '').strip()
+
+        set_file_metadata(target_safe, tenant_id, {
+            "sensitivity": sensitivity or "Unclassified",
+            "owner": owner,
+            "notes": notes,
+            "risk_type": risk_type,
+            "updated": datetime.now().isoformat()
+        })
         
         # Add initial version entry
         version_info = {
@@ -609,7 +1162,7 @@ def confirm_upload(temp_id):
         return redirect(url_for('file_detail', filename=target_safe, tenant=tenant_id))
 
     return render_template(
-        "confirm_upload.html",
+        "users/confirm_upload.html",
         file={
             "temp_id": temp_id,
             "name": original_name,
@@ -620,6 +1173,63 @@ def confirm_upload(temp_id):
             "uploaded_by": "You"
         }
     )
+
+
+@app.route('/scan/dlp/<temp_id>', methods=['GET'])
+@csrf.exempt
+def scan_dlp_temp_file(temp_id):
+    """Scan a temporary file with DLP scanner and return sensitivity level."""
+    pending_path = _pending_path(temp_id)
+    if not pending_path or not os.path.exists(pending_path):
+        return jsonify({"error": "File not found"}), 404
+    
+    try:
+        pending_file = os.path.basename(pending_path)
+        original_name = pending_file.split("__", 1)[1] if "__" in pending_file else pending_file
+
+        with open(pending_path, "rb") as f:
+            from werkzeug.datastructures import FileStorage
+            file = FileStorage(stream=f, filename=original_name)
+
+            if not fileProcessor.passedProcessing(file):
+                return jsonify({"error": "File type not supported for DLP scanning."}), 400
+
+            extracted_text = fileProcessor.readTextFromFile(file)
+
+        if extracted_text:
+            matches = dlpScanner.scan_text(extracted_text)
+            risk_result = dlpScanner.calculateRisk(matches)
+
+            risk_to_sensitivity = {
+                "Critical": "Restricted",
+                "High": "Confidential",
+                "Medium": "Internal",
+                "Low": "Public"
+            }
+
+            risk_level = risk_result.get("level", "Low")
+            sensitivity = risk_to_sensitivity.get(risk_level, "Public")
+
+            return jsonify({
+                "success": True,
+                "riskLevel": risk_level,
+                "riskScore": risk_result.get("score", 0),
+                "sensitivity": sensitivity,
+                "totalMatches": risk_result.get("total_matches", 0),
+                "severityBreakdown": risk_result.get("severity_breakdown", {})
+            }), 200
+
+        return jsonify({
+            "success": True,
+            "riskLevel": "Low",
+            "riskScore": 0,
+            "sensitivity": "Public",
+            "totalMatches": 0,
+            "severityBreakdown": {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"DLP scanning failed: {str(e)}"}), 500
 
 
 @app.route('/upload/version/temp/<path:filename>', methods=['POST'])
@@ -763,7 +1373,7 @@ def confirm_version_upload(temp_id, original_filename):
         return redirect(url_for('file_detail', filename=original_filename, tenant=tenant_id))
 
     return render_template(
-        "confirm_upload.html",
+        "users/confirm_upload.html",
         file={
             "temp_id": temp_id,
             "name": new_filename,
@@ -815,6 +1425,7 @@ def rename_file():
 
     try:
         os.rename(old_path, new_path)
+        rename_file_metadata(sanitize_filename(old_name), sanitize_filename(new_name), tenant_id)
         return jsonify({"message": "File renamed successfully"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -874,6 +1485,27 @@ def delete_file():
         
         # Delete version history from JSON
         delete_file_versions(filename, tenant_id)
+
+        # Remove from received shares for all tenants
+        received_shares = load_received_shares()
+        updated = False
+        for tenant_key, files in list(received_shares.items()):
+            filtered = [f for f in files if not (f.get('name') == filename and str(f.get('owner_tenant_id')) == str(tenant_id))]
+            if len(filtered) != len(files):
+                received_shares[tenant_key] = filtered
+                updated = True
+        if updated:
+            save_received_shares(received_shares)
+
+        # Remove share links that point to this file
+        share_links = load_share_links()
+        share_links_updated = False
+        for token, info in list(share_links.items()):
+            if info.get('filename') == filename and str(info.get('tenant_id')) == str(tenant_id):
+                del share_links[token]
+                share_links_updated = True
+        if share_links_updated:
+            save_share_links(share_links)
         
         return jsonify({"message": "File deleted successfully"}), 200
     except Exception as e:
@@ -1455,6 +2087,7 @@ def policyEngine(file):
         return {'status': 'error', 'message': str(e)}
 
 @app.route('/autodlp', methods=['GET', 'POST'])
+@csrf.exempt
 def autodlp():
     result = None 
     savedFilePath = None

@@ -41,6 +41,12 @@
                 </svg>
                 Recent
             </button>
+            <button class="rail-link" type="button" onclick="window.location.href='/verify-identities?tenant={{ tenant_id }}'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 12l2 2 4-4m7 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Verify Identities
+            </button>
             <button class="rail-link" type="button">
                 <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="3 6 5 6 21 6"/>
@@ -160,6 +166,16 @@
         <div style="margin-bottom: 28px;">
             <input type="password" id="share-password-input" placeholder="Set password (optional)" 
                    style="width: 100%; padding: 14px 15px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 14px; background-color: #f9f9f9; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+        </div>
+
+        <div style="margin-bottom: 18px; display: flex; align-items: center; gap: 10px;">
+            <input type="checkbox" id="enable-key-exchange" style="cursor: pointer;">
+            <label for="enable-key-exchange" style="font-size: 14px; color: #333; cursor: pointer;">Enable Secure Key Exchange</label>
+        </div>
+
+        <div id="key-exchange-info" style="display: none; margin-bottom: 20px;">
+            <div style="font-size: 12px; color: #666; margin-bottom: 6px;">Sharer Fingerprint (share with recipient):</div>
+            <div id="sharer-fingerprint" style="font-family: monospace; background: #eef6ff; padding: 8px 12px; border-radius: 6px; color: #1a73e8; font-weight: 600;"></div>
         </div>
         
         <div style="display: flex; justify-content: flex-start; align-items: center; gap: 15px;">
@@ -581,6 +597,7 @@
     const sendShareBtn = document.getElementById("send-share-btn");
     let currentShareLink = null;
     let currentShareFilename = null;
+    let currentExchangeId = null;
 
     const showShareModal = (filename) => {
         currentShareFilename = filename;
@@ -588,6 +605,9 @@
         shareEmailInput.value = "";
         sharePasswordInput.value = "";
         currentShareLink = null;
+        currentExchangeId = null;
+        document.getElementById('enable-key-exchange').checked = false;
+        document.getElementById('key-exchange-info').style.display = 'none';
         shareModal.style.display = "flex";
         hideFileMenu();
     };
@@ -596,6 +616,7 @@
         shareModal.style.display = "none";
         currentShareLink = null;
         currentShareFilename = null;
+        currentExchangeId = null;
     };
 
     const generateShareLink = async () => {
@@ -606,7 +627,10 @@
                 body: JSON.stringify({ 
                     filename: currentShareFilename,
                     tenant: currentTenant,
-                    password: sharePasswordInput.value || null
+                    password: sharePasswordInput.value || null,
+                    require_key_exchange: document.getElementById('enable-key-exchange').checked,
+                    exchange_id: currentExchangeId,
+                    recipient_email: shareEmailInput.value.trim() || null
                 })
             });
             const data = await response.json();
@@ -642,6 +666,38 @@
 
     cancelShareBtn.addEventListener("click", () => {
         hideShareModal();
+    });
+
+    document.getElementById('enable-key-exchange').addEventListener('change', async (e) => {
+        if (e.target.checked && currentShareFilename) {
+            try {
+                const response = await fetch('/initiate_key_exchange', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filename: currentShareFilename,
+                        recipient_email: shareEmailInput.value.trim() || 'pending',
+                        tenant: currentTenant
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    currentExchangeId = data.exchange_id;
+                    document.getElementById('sharer-fingerprint').textContent = data.sharer_fingerprint;
+                    document.getElementById('key-exchange-info').style.display = 'block';
+                } else {
+                    alert('Failed to initiate key exchange: ' + data.error);
+                    e.target.checked = false;
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Failed to initiate key exchange');
+                e.target.checked = false;
+            }
+        } else {
+            document.getElementById('key-exchange-info').style.display = 'none';
+            currentExchangeId = null;
+        }
     });
 
     sendShareBtn.addEventListener("click", async () => {

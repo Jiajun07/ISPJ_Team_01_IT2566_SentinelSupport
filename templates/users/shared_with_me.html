@@ -41,6 +41,12 @@
                 </svg>
                 Recent
             </button>
+            <button class="rail-link" type="button" onclick="window.location.href='/verify-identities?tenant={{ tenant_id }}'">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 12l2 2 4-4m7 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Verify Identities
+            </button>
             <button class="rail-link" type="button">
                 <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="3 6 5 6 21 6"/>
@@ -190,7 +196,15 @@
         const modified = file.modified || "-";
         const sensitivity = file.sensitivity || "-";
         const hashText = file.hash ? `SHA256: ${file.hash}` : "Checksum pending";
-        const tenantId = file.owner_tenant_id || currentTenant;
+        const tenantId = file.owner_tenant_id || (() => {
+            if (!file.url) return currentTenant;
+            try {
+                const url = new URL(file.url, window.location.origin);
+                return url.searchParams.get('tenant') || currentTenant;
+            } catch (e) {
+                return currentTenant;
+            }
+        })();
         const dateShared = file.date_shared || new Date().toISOString().split('T')[0];
 
         row.dataset.search = `${file.name} ${owner} ${sensitivity}`.toLowerCase();
@@ -355,6 +369,11 @@
             const data = await response.json();
 
             if (response.ok && data.file) {
+                if (data.file.verification_status === 'pending' || data.file.verification_status === 'exchange_not_found') {
+                    alert("Identity verification required. Please verify your identity before accessing this file.");
+                    window.location.href = `/verify-identities?tenant=${currentTenant}`;
+                    return;
+                }
                 // Add the shared file to the list
                 existingFiles.push(data.file);
                 if (data.versions) {
@@ -430,6 +449,12 @@
             const data = await response.json();
 
             if (response.ok && data.file) {
+                if (data.file.verification_status === 'pending' || data.file.verification_status === 'exchange_not_found') {
+                    hidePasswordModal();
+                    alert("Identity verification required. Please verify your identity before accessing this file.");
+                    window.location.href = `/verify-identities?tenant=${currentTenant}`;
+                    return;
+                }
                 // Add the shared file to the list
                 existingFiles.push(data.file);
                 if (data.versions) {
@@ -497,6 +522,11 @@
             }
 
             if (response.ok && data.file) {
+                if (data.file.verification_status === 'pending' || data.file.verification_status === 'exchange_not_found') {
+                    alert("Identity verification required. Please verify your identity before accessing this file.");
+                    window.location.href = `/verify-identities?tenant=${currentTenant}`;
+                    return;
+                }
                 // Add the shared file to the list
                 existingFiles.push(data.file);
                 if (data.versions) {
