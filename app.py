@@ -11,10 +11,12 @@ from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
 from database import (db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin,
                       TenantSecurity, apply_rls_policies, authenticate_user, find_user_by_email, get_verification_code,
-                      mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code, retention_cleanup)
+                      mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code,
+                      retention_cleanup, reactivate_tenant, get_tenant_security_status)
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
-from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm, SecurityBaselineForm
+from forms import (Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm,
+                   SecurityBaselineForm, TenantRecoveryForm)
 from werkzeug.security import generate_password_hash, check_password_hash
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -1947,53 +1949,20 @@ def company_signup():
 
 @app.route('/tenant/<int:tenant_id>/dashboard')
 def tenant_dashboard(tenant_id):
-    if not session.get('tenant_id') or session['tenant_id'] != tenant_id:
-        flash("Access denied.", "danger")
+    if session.get('tenant_id') != tenant_id:
         return redirect(url_for('login'))
 
-    # ✅ DYNAMIC TENANT DATA
-    tenant = db.session.execute(
-        text("SELECT * FROM tenants WHERE id = :id"), {"id": tenant_id}
-    ).first()
-
-    if not tenant:
-        flash("Tenant not found.", "danger")
-        return redirect(url_for('login'))
-
-    # Company name, onboarding date, etc.
-    company_name = tenant.company_name
-    onboarding_date = tenant.created_at.strftime('%d/%m/%Y') if tenant.created_at else 'N/A'
-
-    # Security baselines (from our new table)
-    security = db.session.execute(
-        text("SELECT * FROM tenant_security WHERE tenant_id = :id"), {"id": tenant_id}
-    ).first()
-
-    security_status = {
-        'mfa_enabled': security.mfa_enabled if security else False,
-        'dlp_enabled': security.dlp_enabled if security else False,
-        'dlp_rule_count': security.dlp_rule_count if security else 0,
-        'retention_days': security.data_retention_days if security else 365
-    }
-
-    # Tenant stats (users, documents, etc.)
-    tenant_stats = {
-        'total_users': db.session.execute(
-            text(f'SELECT COUNT(*) FROM "tenant_{tenant_id}".users')
-        ).scalar(),
-        'total_documents': db.session.execute(
-            text(f'SELECT COUNT(*) FROM "tenant_{tenant_id}".documents')
-        ).scalar(),
-        'backups': get_last_backup(tenant_id)  # Your existing function
-    }
+    tenant = Tenant.query.get_or_404(tenant_id)  # ✅ Get tenant object
+    stats = get_tenant_stats(tenant_id)
+    security_status = get_tenant_security_status(tenant_id)  # ✅ NEW
 
     return render_template('CompanyAdmin/dashboard.html',
+                           tenant=tenant,  # ✅ Pass tenant
                            tenant_id=tenant_id,
-                           tenant=tenant,
-                           company_name=company_name,
-                           onboarding_date=onboarding_date,
-                           security_status=security_status,
-                           stats=tenant_stats)
+                           stats=stats,
+                           security_status=security_status,  # ✅ Pass security
+                           company_name=tenant.company_name,
+                           onboarding_date=tenant.created_at.strftime('%d/%m/%Y') if tenant.created_at else 'N/A')
 
 
 @app.teardown_appcontext
@@ -2008,84 +1977,88 @@ def list_documents():
     rows = session.execute("SELECT id, file_path, classification FROM documents").fetchall()
     return {"documents": [dict(r) for r in rows]}
 
-#Setting Backup and Recovery customization settings
-@app.route('/admin/backup-recovery/<int:tenant_id>', methods=['GET', 'POST'])
-def backup_recovery_page(tenant_id):
-    """Backup & Recovery settings page"""
-    tenant = Tenant.query.get_or_404(tenant_id)
-    stats = get_tenant_stats(tenant_id)
-    form = BackupRecoveryForm()
 
-    last_backup = get_last_backup(tenant_id)  # Your function
-    backups = list_backups(tenant_id)  # Your function
-
-    if form.validate_on_submit():
-        if form.backup_submit.data:
-            # Create backup
-            backup_file = backup_tenant(tenant_id)
-            flash(f"Backup created: {backup_file}", "success")
-
-        elif form.restore_submit.data:
-            # Handle restore
-            if form.backup_file.data:
-                filename = secure_filename(form.backup_file.data.filename)
-                restore_path = f"restores/{filename}"
-                form.backup_file.data.save(restore_path)
-
-                success = restore_backup(tenant_id, restore_path)
-                if success:
-                    flash("Restore completed successfully!", "success")
-                else:
-                    flash("Restore failed", "danger")
-
-    return render_template('admin/backup_recovery.html',
-                           tenant=tenant, stats=stats, form=form,
-                           last_backup=last_backup, backups=backups)
 
 # Deactivation of Tenant
-@app.route('/admin/tenant/<int:tenant_id>/deactivate', methods=['GET', 'POST'])
-def tenant_deactivate_page(tenant_id):
-    """Tenant deactivation page with WTForms"""
+@app.route('/tenant/<int:tenant_id>/deactivate', methods=['GET', 'POST'])
+def tenant_deactivate(tenant_id):
+    if session.get('tenant_id') != tenant_id:
+        return redirect(url_for('login'))
+
     tenant = Tenant.query.get_or_404(tenant_id)
     stats = get_tenant_stats(tenant_id)
     form = TenantDeactivateForm()
 
     if form.validate_on_submit():
-        # Form passed validation - process deactivation
         retention_days = int(form.retention_days.data)
-        archive_date = datetime.now() + timedelta(days=retention_days)
-
-        # Archive tenant
-        archived = archive_tenant(tenant_id)
+        archived = archive_tenant(tenant_id)  # ✅ This NOW WORKS
 
         if archived:
-            # Create backup
-            backup_file = backup_tenant(tenant_id)
-
-            flash(f"""
-                Tenant '{tenant.company_name}' archived successfully!<br>
-                Retention period: {retention_days} days<br>
-                Backup saved: {backup_file}
-            """, "success")
-            return redirect(url_for('admin_tenants'))
+            flash(f"✅ Tenant '{tenant.company_name}' archived for {retention_days} days!", "success")
         else:
-            flash("Failed to archive tenant", "danger")
+            flash("❌ Failed to archive tenant", "danger")
 
-    return render_template('admin/tenant_deactivate.html',
-                           tenant=tenant, stats=stats, form=form)
+        return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+
+    return render_template('CompanyAdmin/tenant_deactivate.html',
+                           tenant=tenant, stats=stats, form=form, tenant_id=tenant_id)
+
+
+#Setting Backup and Recovery customization settings
+
+
+@app.route('/tenant/<int:tenant_id>/recovery', methods=['GET', 'POST'])
+def tenant_recovery(tenant_id):
+    if session.get('tenant_id') != tenant_id:
+        return redirect(url_for('login'))
+
+    tenant = Tenant.query.get_or_404(tenant_id)
+    stats = get_tenant_stats(tenant_id)
+    form = TenantRecoveryForm()  # ✅ Create form
+
+    if form.validate_on_submit():
+        reactivated = reactivate_tenant(tenant_id)
+        if reactivated:
+            flash("✅ Tenant reactivated!", "success")
+        return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+
+    return render_template('CompanyAdmin/Tenant_Recovery.html',
+                           tenant=tenant, stats=stats, form=form, tenant_id=tenant_id)
+
+
 def backup_tenant(tenant_id: int):
-    """Create backup before archiving"""
+    """Create Supabase-compatible backup (no PgBouncer)"""
     schema = f"tenant_{tenant_id}"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_file = f"backups/{schema}_archive_{timestamp}.sql"
+    backup_file = f"backups/{schema}_backup_{timestamp}.sql"
 
+    # ✅ FIX: Separate host/port/username/database for pg_dump
     cmd = [
-        'pg_dump', '-h', 'localhost', '-p', '5432', '-U', 'postgres',
-        f'--schema={schema}', '--no-owner', '--no-privileges',
-        '-f', backup_file, 'sdsm_master'
+        'pg_dump',
+        '-h', 'aws-1-ap-south-1.pooler.supabase.com',
+        '-p', '5432',  # Direct port, NOT 6543 (PgBouncer)
+        '-U', 'postgres.ijbxuudpvxsjjdugewuj',
+        '-d', 'postgres',
+        f'--schema={schema}',
+        '--no-owner',
+        '--no-privileges',
+        '-f', backup_file
     ]
-    subprocess.run(cmd, env={"PGPASSWORD": "Jiajun07@@2025"})
-    return backup_file
+
+    # Create backups dir if missing
+    os.makedirs('backups', exist_ok=True)
+
+    result = subprocess.run(cmd,
+                            capture_output=True,
+                            text=True,
+                            env={"PGPASSWORD": "SentinelSupport*2026"})
+
+    if result.returncode == 0:
+        print(f"✅ Backup created: {backup_file}")
+        return backup_file
+    else:
+        print(f"❌ Backup failed: {result.stderr}")
+        return None  # Graceful failure
 
 
 @app.route('/tenant/<int:tenant_id>/security-baselines', methods=['GET', 'POST'])
