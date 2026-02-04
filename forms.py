@@ -38,6 +38,7 @@ class SignUpForm(FlaskForm):
     email = StringField('Email', validators=[DataRequired(), Email()])
     password = PasswordField('Password', validators=[DataRequired(), Length(max=64), password_complexity_check])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
+    tenant_id = SelectField('Company', coerce=int, validators=[DataRequired()])
     submit = SubmitField('Sign Up')
 
 class TwoFactorForm(FlaskForm):

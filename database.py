@@ -10,9 +10,9 @@ from datetime import datetime, timezone, UTC
 # Supabase connection (same as your app.py)
 MASTER_DB_URL = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport*2026@"
-    "aws-1-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+    "aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
 )
-
+DB_USE_PGBOUNCER = os.getenv("DB_USE_PGBOUNCER", "false").lower() == "true"
 db = SQLAlchemy()
 
 class TenantSecurity(db.Model):
@@ -34,6 +34,50 @@ class Tenant(db.Model):
     created_at = db.Column(db.DateTime, default=db.func.now())
 
 
+class User(db.Model):
+    """User accounts - stored in tenant schemas"""
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, nullable=False, index=True)
+    email = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(50), default='user')  # 'admin', 'user', 'viewer'
+    is_email_verified = db.Column(db.Boolean, default=False)
+    two_fa_enabled = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'email', name='uq_tenant_email'),
+    )
+
+
+class VerificationCode(db.Model):
+    """Email verification codes for signup and password reset"""
+    __tablename__ = 'verification_codes'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False, index=True)
+    code = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    code_type = db.Column(db.String(50), nullable=False)  # 'email_verify', 'password_reset', 'invite'
+    email = db.Column(db.String(255), nullable=False)  # Email it was sent to
+    is_used = db.Column(db.Boolean, default=False)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+
+class TwoFactorAuth(db.Model):
+    """2FA settings and credentials for users"""
+    __tablename__ = 'two_factor_auth'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False, unique=True, index=True)
+    auth_type = db.Column(db.String(50), nullable=False)  # 'email', 'totp', 'sms'
+    secret_key = db.Column(db.String(255), nullable=True)  # For TOTP
+    backup_codes = db.Column(db.JSON, nullable=True)  # List of one-time backup codes
+    backup_email = db.Column(db.String(255), nullable=True)  # For email-based 2FA
+    is_verified = db.Column(db.Boolean, default=False)
+    enabled = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
 
 
 def get_last_backup(tenant_id: int):
@@ -261,6 +305,264 @@ def apply_rls_policies(tenant_id: int, security: TenantSecurity):
 
     db.session.commit()
     print(f"✅ RLS + Security policies applied to tenant_{tenant_id}")
+
+def authenticate_user(tenant_id: int, email: str, password: str):
+    """Authenticate a user in a specific tenant schema"""
+    schema_name = f"tenant_{tenant_id}"
+    
+    try:
+        session = MasterSessionLocal()
+        session.execute(text(f'SET search_path TO "{schema_name}", public'))
+        
+        # Get user
+        user_row = session.execute(
+            text("SELECT id, email, password_hash, role, is_email_verified, two_fa_enabled FROM users WHERE email = :email"),
+            {"email": email}
+        ).fetchone()
+        
+        if not user_row:
+            session.close()
+            return None
+        
+        # Verify password
+        stored_hash = user_row.password_hash.encode()
+        try:
+            if bcrypt.checkpw(password.encode(), stored_hash):
+                session.close()
+                return {
+                    'user_id': user_row.id,
+                    'tenant_id': tenant_id,
+                    'schema_name': schema_name,
+                    'email': user_row.email,
+                    'role': user_row.role,
+                    'is_email_verified': user_row.is_email_verified,
+                    'two_fa_enabled': user_row.two_fa_enabled
+                }
+        except Exception as e:
+            print(f"Password check error: {e}")
+        
+        session.close()
+        return None
+        
+    except Exception as e:
+        print(f"Authentication error for tenant_{tenant_id}: {e}")
+        return None
+
+
+def find_user_by_email(email: str):
+    """Find user across all tenant schemas by email"""
+    tenants = get_all_tenants()
+    
+    for tenant_row in tenants:
+        tenant_id = tenant_row.id
+        schema_name = f"tenant_{tenant_id}"
+        
+        try:
+            session = MasterSessionLocal()
+            session.execute(text(f'SET search_path TO "{schema_name}", public'))
+            
+            user_row = session.execute(
+                text("SELECT id, email, role, is_email_verified FROM users WHERE email = :email"),
+                {"email": email}
+            ).fetchone()
+            
+            if user_row:
+                session.close()
+                return {
+                    'user_id': user_row.id,
+                    'tenant_id': tenant_id,
+                    'schema_name': schema_name,
+                    'email': user_row.email,
+                    'role': user_row.role,
+                    'is_email_verified': user_row.is_email_verified
+                }
+            
+            session.close()
+        except Exception as e:
+            print(f"Skipping tenant_{tenant_id}: {e}")
+            continue
+    
+    return None
+
+
+def get_verification_code(code: str, code_type: str = None):
+    """Retrieve a verification code if it exists and hasn't expired"""
+    try:
+        # Check in public schema (verification codes might be public)
+        result = db.session.execute(
+            text("""
+                SELECT id, user_id, code, code_type, email, is_used, expires_at 
+                FROM verification_codes 
+                WHERE code = :code AND is_used = FALSE
+            """),
+            {"code": code}
+        ).fetchone()
+        
+        if result:
+            # Check if expired
+            if result.expires_at < datetime.datetime.now():
+                return None
+            
+            # If code_type specified, verify it matches
+            if code_type and result.code_type != code_type:
+                return None
+            
+            return {
+                'id': result.id,
+                'user_id': result.user_id,
+                'code_type': result.code_type,
+                'email': result.email,
+                'is_used': result.is_used
+            }
+        
+        return None
+    except Exception as e:
+        print(f"Error retrieving verification code: {e}")
+        return None
+
+
+def mark_verification_code_used(code_id: int):
+    """Mark a verification code as used"""
+    try:
+        db.session.execute(
+            text("UPDATE verification_codes SET is_used = TRUE WHERE id = :id"),
+            {"id": code_id}
+        )
+        db.session.commit()
+        return True
+    except Exception as e:
+        print(f"Error marking code as used: {e}")
+        db.session.rollback()
+        return False
+
+
+def create_signup_code(tenant_id: int, email: str = None) -> str:
+    """Create a signup verification code for a tenant"""
+    import secrets
+    import string
+    
+    try:
+        # Generate code: INVITE_XXXXX
+        random_part = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(12))
+        code = f"INVITE_{random_part}"
+        
+        # Create verification code record
+        expires_at = datetime.datetime.now() + datetime.timedelta(days=7)  # 7 days valid
+        
+        verification = VerificationCode(
+            user_id=tenant_id,  # Store tenant_id here as reference
+            code=code,
+            code_type='signup_invite',
+            email=email or f"tenant_{tenant_id}@example.com",
+            is_used=False,
+            expires_at=expires_at
+        )
+        
+        db.session.add(verification)
+        db.session.commit()
+        print(f"✅ Created signup code {code} for tenant_{tenant_id}")
+        return code
+    
+    except Exception as e:
+        print(f"❌ Error creating signup code: {e}")
+        db.session.rollback()
+        return None
+
+
+def validate_signup_code(code: str) -> dict:
+    """Validate a signup code and return tenant info"""
+    try:
+        verification = VerificationCode.query.filter_by(
+            code=code,
+            code_type='signup_invite',
+            is_used=False
+        ).first()
+        
+        if not verification:
+            return None
+        
+        # Check if expired
+        if verification.expires_at < datetime.datetime.now():
+            return None
+        
+        # Get tenant info
+        tenant = Tenant.query.get(verification.user_id)
+        
+        if not tenant or tenant.status != 'active':
+            return None
+        
+        return {
+            'code_id': verification.id,
+            'tenant_id': tenant.id,
+            'company_name': tenant.company_name,
+            'schema_name': f"tenant_{tenant.id}"
+        }
+    
+    except Exception as e:
+        print(f"Error validating signup code: {e}")
+        return None
+
+
+def create_user_in_tenant(tenant_id: int, email: str, password_hash: str, role: str = 'user') -> dict:
+    schema_name = f"tenant_{tenant_id}"
+
+    try:
+        session = MasterSessionLocal()
+        print(f"🔄 Creating user in {schema_name}")
+
+        session.execute(text(f'SET search_path TO "{schema_name}", public'))
+
+        existing = session.execute(
+            text("SELECT id FROM users WHERE email = :email"),
+            {"email": email}
+        ).fetchone()
+
+        if existing:
+            session.close()
+            print(f"⚠️ User {email} already exists in {schema_name}")
+            return None
+
+        # Match tenant users table layout
+        session.execute(
+            text("""
+                INSERT INTO users (email, password_hash, role, created_at)
+                VALUES (:email, :password_hash, :role, NOW())
+            """),
+            {
+                "email": email,
+                "password_hash": password_hash,
+                "role": role,
+            }
+        )
+
+        session.commit()
+        print(f"✅ Committed user {email} to database")
+
+        user_row = session.execute(
+            text("SELECT id, email, role FROM users WHERE email = :email"),
+            {"email": email}
+        ).fetchone()
+
+        session.close()
+
+        print(f"✅ Created user {email} in {schema_name}")
+
+        return {
+            "user_id": user_row.id,
+            "email": user_row.email,
+            "role": user_row.role,
+            "tenant_id": tenant_id,
+        }
+
+    except Exception as e:
+        print(f"❌ Error creating user in {schema_name}: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        try:
+            session.close()
+        except:
+            pass
+        return None
 
 
 #class files(db.Model):

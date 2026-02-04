@@ -1,4 +1,5 @@
 # app.py
+import bcrypt
 import os
 import hashlib
 import secrets
@@ -7,7 +8,7 @@ from flask import Flask, g, render_template, request, redirect, url_for, send_fr
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
-from database import db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin, TenantSecurity, apply_rls_policies
+from database import db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin, TenantSecurity, apply_rls_policies, authenticate_user, find_user_by_email, get_verification_code, mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm, SecurityBaselineForm
@@ -1156,7 +1157,7 @@ def login():
         email_input = escape(form.email.data)
         password_input = escape(form.password.data)
 
-        # ✅ NEW: Try tenant admin login FIRST
+        # ✅ Try tenant admin login FIRST
         tenant_admin = authenticate_tenant_admin(email_input, password_input)
 
         if tenant_admin:
@@ -1165,9 +1166,7 @@ def login():
             session['tenant_schema'] = tenant_admin['schema_name']
             session['user_type'] = 'tenant_admin'
             session['company_name'] = tenant_admin['company_name']
-
-            # Your existing 2FA flow
-            session['temp_user_id'] = tenant_admin['tenant_id']
+            session['email'] = email_input
             session['temp_user_email'] = email_input
             session['needs_2fa'] = True
 
@@ -1175,8 +1174,39 @@ def login():
             flash("2FA code sent to your admin account!", "info")
             return redirect(url_for('verify_2fa'))
 
-        # ❌ REMOVE: user = True (this breaks everything)
-        # Keep teammate's logic if needed for other users
+        # ✅ Try regular user login across all tenants
+        user = find_user_by_email(email_input)
+
+        if user:
+            # Authenticate user in their tenant
+            authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
+            
+            if authenticated:
+                # Check if email is verified
+                if not authenticated['is_email_verified']:
+                    flash("Please verify your email before logging in.", "warning")
+                    return redirect(url_for('signup'))
+                
+                print(f"✅ User login for {email_input} in tenant {authenticated['tenant_id']}")
+                session['tenant_id'] = authenticated['tenant_id']
+                session['tenant_schema'] = authenticated['schema_name']
+                session['user_id'] = authenticated['user_id']
+                session['user_type'] = 'user'
+                session['email'] = email_input
+                session['temp_user_email'] = email_input
+                session['needs_2fa'] = authenticated.get('two_fa_enabled', False)
+
+                if authenticated.get('two_fa_enabled'):
+                    send_2fa_email(email_input)
+                    flash("2FA code sent to your email!", "info")
+                    return redirect(url_for('verify_2fa'))
+                else:
+                    # Direct login without 2FA
+                    session.permanent = True
+                    app.permanent_session_lifetime = timedelta(hours=24)
+                    flash(f"Welcome back, {email_input}!", "success")
+                    return redirect(url_for('myfiles'))
+
         flash("Invalid email or password.", "danger")
 
     return render_template('login/login_page.html', form=form)
@@ -1200,71 +1230,46 @@ def logout():
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     form = SignUpForm()
+    tenants = db.session.query(Tenant).all()
     
-    if request.method == 'POST':
-        signup_code = request.form.get('signup_code')
-        email = escape(request.form.get('email', ''))
-        password = escape(request.form.get('password', ''))
-        
-        # Validate signup code (alphanumeric, 6-12 chars)
-        if not validate_signup_code_format(signup_code):
-            flash("Invalid signup code format.", "danger")
-            return render_template('login/tmpsignup.html', form=form)
-        
-        # Code validation would connect to DB when available
-        # For now: accept codes in format: TENANT_CODE_XXXXX
-        if not signup_code.startswith('INVITE_'):
-            flash("Invalid or expired signup code.", "danger")
-            return render_template('login/tmpsignup.html', form=form)
-        
-        # Store signup info in session temporarily
-        session['signup_code'] = signup_code
-        session['signup_email'] = email
-        session['signup_password_hash'] = generate_password_hash(password)
-        session['pending_signup'] = True
-        
-        # Send verification email before account creation
-        send_signup_verification_email(email, signup_code)
-        flash("Verification email sent. Please check your inbox.", "success")
-        return redirect(url_for('verify_signup_email'))
+    # Populate tenant_id choices dynamically
+    form.tenant_id.choices = [(t.id, t.company_name) for t in tenants]
     
-    return render_template('login/tmpsignup.html', form=form)
+    if form.validate_on_submit():
+        email = escape(form.email.data.strip())
+        password = escape(form.password.data)
+        tenant_id = form.tenant_id.data
+        
+        # Optional: bypass global cross-tenant uniqueness to allow same email in multiple tenants
+        existing_user = find_user_by_email(email)
+        if existing_user:
+            flash(f"Email already exists in tenant {existing_user['tenant_id']} – continuing anyway.", "warning")
+        
+        # Make sure tenant exists
+        tenant = db.session.query(Tenant).filter_by(id=tenant_id).first()
+        if not tenant:
+            flash("Invalid tenant selected.", "danger")
+            return render_template('login/tmpsignup.html', form=form, tenants=tenants)
+        
+        # Hash password using bcrypt (matches authenticate_user)
+        password_bytes = password.encode()
+        password_hash = bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode()
+        
+        # Create user in tenant schema
+        new_user = create_user_in_tenant(tenant_id, email, password_hash, role='user')
+        
+        if not new_user:
+            flash("Failed to create account in tenant schema. Check logs.", "danger")
+            return render_template('login/tmpsignup.html', form=form, tenants=tenants)
+        
+        flash(
+            f"✅ Account created successfully in tenant_{tenant_id}.users (id={new_user['user_id']}, email={new_user['email']})",
+            "success"
+        )
+        return redirect(url_for('login'))
+    
+    return render_template('login/tmpsignup.html', form=form, tenants=tenants)
 
-# @app.route('/signup', methods=['GET', 'POST'])
-# def signup():
-#     username = session.get('username', 'Anonymous')
-#     form = SignUpForm()
-
-#     if request.method == 'POST' and form.validate_on_submit():
-#         existing_user = User.query.filter(
-#             (User.username == form.username.data) | (User.email == form.email.data)
-#         ).first()
-
-#         if existing_user:
-#             flash("Username or email already in use. Please choose another.", "danger")
-#             return render_template('login/signup_page.html', form=form)
-
-#         hashed_password = generate_password_hash(escape(form.password.data))
-
-#         new_user = User(
-#             username=escape(form.username.data),
-#             email=escape(form.email.data),
-#             password=hashed_password,
-#             user_type=escape(form.user_type.data)
-#         )
-#         if new_user.user_type == 'volunteer':
-#             db.session.add(new_user)
-#             db.session.commit()
-#             volunteer_table_join(new_user)# for joining user data to volunteer database if usertype = volunteer
-#         elif new_user.user_type == 'elderly':
-#             db.session.add(new_user)
-#             db.session.commit()
-#             elderly_table_join(new_user)
-#         send_verification_email(new_user.email)
-#         flash(f"Please Verify Your Email!", "success")
-#         return redirect(url_for('login'))
-
-#     return render_template('login/signup_page.html', form=form)
 
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forget_password():
@@ -1436,27 +1441,64 @@ def resend_2fa():
 
 @app.route('/verify-signup-email/<token>', methods=['GET', 'POST'])
 def verify_signup_email(token=None):
-    """Verify email during signup with token"""
+    """Verify email during signup with token and create user account"""
     if request.method == 'GET' and token:
         try:
             email = s.loads(token, salt='signup-confirm', max_age=3600)  # 1 hour
-            session['verified_signup_email'] = email
-            session['email_verified'] = True
-            flash("Email verified! Your account has been created.", "success")
+            
+            # Get signup info from session
+            signup_email = session.get('signup_email')
+            tenant_id = session.get('signup_tenant_id')
+            password_hash = session.get('signup_password_hash')
+            code_id = session.get('signup_code_id')
+            
+            # Verify token matches session email
+            if email != signup_email:
+                flash("Email mismatch. Please sign up again.", "danger")
+                return redirect(url_for('signup'))
+            
+            if not all([signup_email, tenant_id, password_hash, code_id]):
+                flash("Session expired. Please sign up again.", "danger")
+                return redirect(url_for('signup'))
+            
+            # Create user in tenant schema
+            new_user = create_user_in_tenant(tenant_id, signup_email, password_hash, role='user')
+            
+            if not new_user:
+                flash("Failed to create account. Please try again.", "danger")
+                return redirect(url_for('signup'))
+            
+            # Mark signup code as used
+            mark_verification_code_used(code_id)
+            
+            # Clear session
+            session.pop('signup_email', None)
+            session.pop('signup_tenant_id', None)
+            session.pop('signup_password_hash', None)
+            session.pop('signup_code_id', None)
+            session.pop('signup_company', None)
+            session.pop('pending_signup', None)
+            
+            flash(f"✅ Account created successfully! You can now log in.", "success")
             return redirect(url_for('login'))
+        
         except SignatureExpired:
             flash("Verification link expired. Please sign up again.", "danger")
             return redirect(url_for('signup'))
         except Exception as e:
+            print(f"Signup verification error: {e}")
             flash("Invalid verification link.", "danger")
             return redirect(url_for('signup'))
     
     # POST: Resend verification email
     if request.method == 'POST':
         email = session.get('signup_email')
-        if email:
-            send_signup_verification_email(email, session.get('signup_code', ''))
+        signup_code = session.get('signup_code')
+        if email and signup_code:
+            send_signup_verification_email(email, signup_code)
             return jsonify({'success': True, 'message': 'Verification email resent'}), 200
+        else:
+            return jsonify({'success': False, 'error': 'Session expired'}), 400
     
     return render_template('login/verify_signup_email.html')
 
