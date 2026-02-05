@@ -7,11 +7,14 @@ compliance_bp = Blueprint('compliance', __name__)
 
 @compliance_bp.route('/compliance-dashboard')
 def compliance_dashboard():
-    if 'tenant_id' not in session:
-        return redirect(url_for('home'))
+    user_role = session.get('user_type')
+    if user_role not in ['superadmin', 'tenant_admin']:
+        return redirect(url_for('login'))
+    if user_role == 'tenant_admin' and 'tenant_id' not in session:
+        return redirect(url_for('login'))
     user_role = session.get('user_type')
     tenant_id = session.get('tenant_id')
-    if user_role == "super_admin":
+    if user_role == "superadmin":
         logs, summary = ComplianceService.generateComplianceData()
         scope = "Platform-wide"
     elif user_role == "tenant_admin":
@@ -34,11 +37,14 @@ def compliance_dashboard():
 
 @compliance_bp.route('/compliance-report')
 def compliance_report():
-    if 'user_id' not in session:
-        return redirect(url_for('home'))
+    user_role = session.get('user_type')
+    if user_role not in ['superadmin', 'tenant_admin']:
+        return redirect(url_for('login'))
+    if user_role == 'tenant_admin' and 'tenant_id' not in session:
+        return redirect(url_for('login'))
     user_role = session.get('user_type')
     tenant_id = session.get('tenant_id')
-    if user_role not in ["SUPER_ADMIN", "TENANT_ADMIN"]:
+    if user_role not in ["superadmin", "tenant_admin"]:
         abort(403)
     start_date_str = request.args.get('start_date')
     end_date_str = request.args.get('end_date')
@@ -52,7 +58,7 @@ def compliance_report():
     except ValueError:
         flash('Invalid date format', 'error')
         return redirect(url_for('compliance.compliance_dashboard'))
-    if user_role == "SUPER_ADMIN":
+    if user_role == "superadmin":
         logs, summary = ComplianceService.generateComplianceData(
             startDate=start_date, 
             endDate=end_date

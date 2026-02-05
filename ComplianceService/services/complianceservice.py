@@ -19,116 +19,228 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 
 class ComplianceService:
     @staticmethod
-    @staticmethod
     def generateComplianceData(tenantID=None, startDate=None, endDate=None):
         if not startDate:
             startDate = datetime.now() - timedelta(days=30)
         if not endDate:
             endDate = datetime.now()
+        
         try:
             with MasterSessionLocal() as session:
-                # Debug: Check total audit logs in database
-                total_check = session.execute(text("SELECT COUNT(*) as total FROM system_audit_logs")).fetchone()
-                
-                query = """
-                    SELECT *
+                base_query = """
+                    SELECT 
+                        id, created_at, target_tenant_id, admin_id, admin_email,
+                        action_type, target_resource, resource_id, success,
+                        action_description, action_category, ip_address,
+                        user_agent, before_state, after_state, additional_data
                     FROM system_audit_logs
                     WHERE created_at BETWEEN :start_date AND :end_date
                 """
+                
                 params = {
                     "start_date": startDate,
                     "end_date": endDate 
                 }
 
                 if tenantID:
-                    query += " AND target_tenant_id = :tenant_id"
+                    base_query += " AND target_tenant_id = :tenant_id"
                     params["tenant_id"] = str(tenantID)
                 
-                query += " ORDER BY created_at DESC"
+                base_query += " ORDER BY created_at DESC"
                 
-                result = session.execute(text(query), params)
+                print(f" Executing query with params: {params}")
+                result = session.execute(text(base_query), params)
                 logs = result.fetchall()
                 
-                # If no logs, check what's in the database
-                if len(logs) == 0:
-                    date_range_check = session.execute(text(
-                        "SELECT MIN(created_at) as min_date, MAX(created_at) as max_date FROM system_audit_logs"
-                    )).fetchone()
-
-                    if tenantID:
-                        tenant_check = session.execute(text(
-                            "SELECT DISTINCT target_tenant_id FROM system_audit_logs LIMIT 10"
-                        )).fetchall()
-
+                print(f" Found {len(logs)} audit log entries")
+                
                 logData = []
                 for log in logs:
+                    additional_data = {}
+                    if log.additional_data:
+                        try:
+                            additional_data = json.loads(log.additional_data)
+                        except:
+                            additional_data = {}
+                    
                     logData.append({
                         'id': log.id,
                         'timestamp': log.created_at,
                         'tenant_id': log.target_tenant_id,
                         'actor_id': log.admin_id,
-                        'actor_email': log.admin_email,
-                        'actor_role': 'ADMIN',
+                        'actor_email': log.admin_email or 'System',
+                        'actor_role': ComplianceService.determine_actor_role(log.action_type, log.target_tenant_id),
                         'action': log.action_type,
-                        'resource_type': log.target_resource,
+                        'resource_type': log.target_resource or 'SYSTEM',
                         'resource_id': log.resource_id,
                         'result': 'SUCCESS' if log.success else 'FAILURE',
                         'severity': ComplianceService.determine_severity(log.action_type, log.success),
-                        'details': log.action_description,
-                        'category': log.action_category,
-                        'ip_address': log.ip_address
+                        'details': log.action_description or '',
+                        'category': log.action_category or 'SYSTEM',
+                        'ip_address': log.ip_address,
+                        'user_agent': log.user_agent,
+                        'before_state': log.before_state,
+                        'after_state': log.after_state,
+                        'additional_data': additional_data
                     })
                 
                 summary = ComplianceService.calculateSummary(logData)
-                return logData, summary
                 
+                print(f" Generated compliance report: {summary['total_events']} events, {summary['success_rate']}% success rate")
+                
+                return logData, summary
+                    
         except Exception as e:
-            print(f"Error generating compliance data: {e}")
+            print(f" Error generating compliance data: {e}")
             import traceback
             traceback.print_exc()
             return [], {}
-    
+
+    @staticmethod
+    def determine_actor_role(action_type, tenant_id):
+        """Determine actor role based on action type and tenant context"""
+        if tenant_id == 'SYSTEM' or action_type.startswith('SYSTEM_'):
+            return 'SYSTEM_ADMIN'
+        elif action_type.startswith('TENANT_ADMIN'):
+            return 'TENANT_ADMIN'
+        elif action_type.startswith('TENANT_'):
+            return 'TENANT_USER'
+        else:
+            return 'SYSTEM'
+
     @staticmethod
     def calculateSummary(logs):
+        """Calculate REAL summary statistics from actual audit log data"""
+        if not logs:
+            return {
+                'total_events': 0,
+                'successful_logins': 0,
+                'failed_logins': 0,
+                'file_uploads': 0,
+                'file_deletions': 0,
+                'file_shares': 0,
+                'dlp_violations': 0,
+                'dlp_scans_total': 0,
+                'admin_actions': 0,
+                'security_events': 0,
+                'tenant_management': 0,
+                'config_changes': 0,
+                'database_operations': 0,
+                'system_operations': 0,
+                'unique_tenants': 0,
+                'unique_users': 0,
+                'success_rate': 100.0,
+                'high_risk_events': 0,
+                'compliance_dashboard_access': 0,
+                'audit_log_access': 0,
+                'data_exports': 0,
+                'file_downloads': 0,
+                'share_links_created': 0,
+                'key_exchanges': 0,
+                'retention_cleanups': 0,
+                'failed_2fa_attempts': 0
+            }
+        
         summary = {
-        "total_events": len(logs),
-        "failed_logins": ComplianceService.count_action(logs, [
-            "TENANT_USER_LOGIN", "SYSTEM_ADMIN_LOGIN"
-        ], success=False),
-        "successful_logins": ComplianceService.count_action(logs, [
-            "TENANT_USER_LOGIN", "SYSTEM_ADMIN_LOGIN"
-        ], success=True),
-        "file_uploads": ComplianceService.count_action(logs, ["TENANT_FILE_UPLOAD"]),
-        "file_deletions": ComplianceService.count_action(logs, ["TENANT_FILE_DELETE"]),
-        "file_shares": ComplianceService.count_action(logs, ["TENANT_FILE_SHARE"]),
-        "dlp_violations": ComplianceService.count_action(logs, ["TENANT_DLP_SCAN"], success=False),
-        "dlp_scans_total": ComplianceService.count_action(logs, ["TENANT_DLP_SCAN"]),
-        "admin_actions": ComplianceService.count_action(logs, [
-            "TENANT_ADMIN_CREATE", "TENANT_ADMIN_DELETE", "TENANT_ADMIN_RESET_PASSWORD",
-            "TENANT_ADMIN_ROLE_GRANT", "TENANT_ADMIN_ROLE_REVOKE"
-        ]),
-        "security_events": ComplianceService.count_action(logs, [
-            "ENCRYPTION_KEY_GENERATE", "ENCRYPTION_KEY_ROTATE", "SECRET_MODIFY",
-            "SECURITY_CONFIG_CHANGE", "SYSTEM_ADMIN_ACCESS_DENIED"
-        ]),
-        "tenant_management": ComplianceService.count_action(logs, [
-            "TENANT_CREATE", "TENANT_DELETE", "TENANT_ACTIVATE", 
-            "TENANT_DEACTIVATE", "TENANT_SUSPEND"
-        ]),
-        "config_changes": ComplianceService.count_action(logs, [
-            "TENANT_CONFIG_CHANGE", "SYSTEM_CONFIG_CHANGE", "TENANT_SCHEMA_MODIFY"
-        ]),
-        "database_operations": ComplianceService.count_action(logs, [
-            "MASTER_DB_QUERY", "MASTER_DB_SCHEMA_CHANGE", "MIGRATION_RUN"
-        ]),
-        "system_operations": ComplianceService.count_action(logs, [
-            "SYSTEM_BACKUP", "SYSTEM_RESTORE", "SYSTEM_MAINTENANCE"
-        ]),
-        "unique_tenants": len(set([log['tenant_id'] for log in logs if log['tenant_id'] and log['tenant_id'] != 'SYSTEM'])),
-        "unique_users": len(set([log['actor_email'] for log in logs if log['actor_email']])),
-        "success_rate": ComplianceService.calculate_success_rate(logs),
-        "high_risk_events": ComplianceService.count_high_risk_events(logs)
+            'total_events': len(logs),
+
+            'successful_logins': ComplianceService.count_action(logs, [
+                'TENANT_USER_LOGIN', 'SYSTEM_ADMIN_LOGIN', 'TENANT_ADMIN_LOGIN'
+            ], success=True),
+            'failed_logins': ComplianceService.count_action(logs, [
+                'TENANT_USER_LOGIN', 'SYSTEM_ADMIN_LOGIN', 'TENANT_ADMIN_LOGIN'
+            ], success=False),
+            'failed_2fa_attempts': ComplianceService.count_action(logs, [
+                'TWO_FACTOR_AUTH_FAILED'
+            ]),
+            
+            'file_uploads': ComplianceService.count_action(logs, [
+                'TENANT_FILE_UPLOAD', 'FILE_UPLOADED', 'FILE_UPLOAD_TEMP'
+            ]),
+            'file_downloads': ComplianceService.count_action(logs, [
+                'FILE_DOWNLOADED', 'TENANT_FILE_DOWNLOAD'
+            ]),
+            'file_deletions': ComplianceService.count_action(logs, [
+                'TENANT_FILE_DELETE', 'FILE_DELETED', 'FILE_MOVED_TO_BIN'
+            ]),
+            'file_shares': ComplianceService.count_action(logs, [
+                'TENANT_FILE_SHARE', 'SHARE_LINK_GENERATED', 'FILE_SHARED'
+            ]),
+            'share_links_created': ComplianceService.count_action(logs, [
+                'SHARE_LINK_GENERATED'
+            ]),
+            'key_exchanges': ComplianceService.count_action(logs, [
+                'KEY_EXCHANGE_INITIATED', 'KEY_EXCHANGE_COMPLETED'
+            ]),
+            
+            'dlp_scans_total': ComplianceService.count_action(logs, [
+                'TENANT_DLP_SCAN', 'DLP_SCAN_COMPLETED'
+            ]),
+            'dlp_violations': ComplianceService.count_action(logs, [
+                'TENANT_DLP_SCAN', 'DLP_SCAN_COMPLETED'
+            ], success=False),
+            
+            'admin_actions': ComplianceService.count_action(logs, [
+                'TENANT_ADMIN_CREATE', 'TENANT_ADMIN_DELETE', 'TENANT_ADMIN_RESET_PASSWORD',
+                'TENANT_ADMIN_ROLE_GRANT', 'TENANT_ADMIN_ROLE_REVOKE', 'USER_CREATED',
+                'USER_DELETED', 'PASSWORD_RESET'
+            ]),
+            
+            'security_events': ComplianceService.count_action(logs, [
+                'ENCRYPTION_KEY_GENERATE', 'ENCRYPTION_KEY_ROTATE', 'SECRET_MODIFY',
+                'SECURITY_CONFIG_CHANGE', 'SYSTEM_ADMIN_ACCESS_DENIED', 'ACCESS_DENIED',
+                'SECURITY_VIOLATION'
+            ]),
+            
+            'tenant_management': ComplianceService.count_action(logs, [
+                'TENANT_CREATE', 'TENANT_DELETE', 'TENANT_ACTIVATE', 
+                'TENANT_DEACTIVATE', 'TENANT_SUSPEND'
+            ]),
+            
+            'config_changes': ComplianceService.count_action(logs, [
+                'TENANT_CONFIG_CHANGE', 'SYSTEM_CONFIG_CHANGE', 'TENANT_SCHEMA_MODIFY',
+                'SECURITY_BASELINE_UPDATE'
+            ]),
+            
+            'database_operations': ComplianceService.count_action(logs, [
+                'MASTER_DB_QUERY', 'MASTER_DB_SCHEMA_CHANGE', 'MIGRATION_RUN'
+            ]),
+            
+            'system_operations': ComplianceService.count_action(logs, [
+                'SYSTEM_BACKUP', 'SYSTEM_RESTORE', 'SYSTEM_MAINTENANCE'
+            ]),
+            
+            'compliance_dashboard_access': ComplianceService.count_action(logs, [
+                'COMPLIANCE_DASHBOARD_ACCESS'
+            ]),
+            'audit_log_access': ComplianceService.count_action(logs, [
+                'AUDIT_LOG_ACCESS', 'SYSTEM_AUDIT_ACCESS'
+            ]),
+            'data_exports': ComplianceService.count_action(logs, [
+                'COMPLIANCE_DATA_EXPORTED', 'DATA_EXPORT'
+            ]),
+            
+            'retention_cleanups': ComplianceService.count_action(logs, [
+                'RETENTION_CLEANUP', 'BIN_CLEANUP'
+            ]),
         }
+    
+        unique_tenants = set()
+        unique_users = set()
+        
+        for log in logs:
+            if log['tenant_id'] and log['tenant_id'] not in ['SYSTEM', 'UNKNOWN']:
+                unique_tenants.add(log['tenant_id'])
+            if log['actor_email'] and log['actor_email'] != 'System':
+                unique_users.add(log['actor_email'])
+        
+        summary.update({
+            'unique_tenants': len(unique_tenants),
+            'unique_users': len(unique_users),
+            'success_rate': ComplianceService.calculate_success_rate(logs),
+            'high_risk_events': ComplianceService.count_high_risk_events(logs)
+        })
+        
         return summary
     
     @staticmethod
