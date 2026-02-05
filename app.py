@@ -51,6 +51,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from apscheduler.schedulers.background import BackgroundScheduler
 from collections import defaultdict, deque
+from ComplianceService.routes.complianceroutes import compliance_bp
+from ComplianceService.routes.exportroutes import export_bp
 
 load_dotenv()
 
@@ -301,6 +303,8 @@ configPath = os.path.join(app.root_path, "config", "keywords.json")
 fileConfigPath = os.path.join(app.root_path, "config", "supportedfiles.json")
 dlpScanner = DLPScanner(configPath)
 fileProcessor = FileProcessor(fileConfigPath)
+app.register_blueprint(compliance_bp, url_prefix='/compliance')
+app.register_blueprint(export_bp, url_prefix='/export')
 
 csrf = CSRFProtect(app)
 
@@ -2286,7 +2290,7 @@ def delete_file():
             category='FILE_MANAGEMENT',
             target_resource='FILE',
             resource_id=filename,
-            additional_data={'bin_key': bin_key},
+            additional_data={},
             tenant_id=tenant_id
         )
         
@@ -2447,10 +2451,7 @@ def download_file(filename):
     file_record = get_file_from_db(tenant_id, filename=filename)
     
     if not file_record:
-        flash("File not found", "danger")
-        return redirect(url_for('myfiles'))
 
-    if not os.path.exists(file_path):
         log_tenant_event(
             action_type='FILE_DOWNLOAD_FAILED',
             description=f"File download failed: File not found - {filename}",
@@ -2460,7 +2461,9 @@ def download_file(filename):
             success=False,
             tenant_id=tenant_id
         )
-        return "File not found", 404
+
+        flash("File not found", "danger")
+        return redirect(url_for('myfiles'))
     
     log_tenant_event(
         action_type='FILE_DOWNLOADED',
@@ -2468,7 +2471,7 @@ def download_file(filename):
         category='FILE_MANAGEMENT',
         target_resource='FILE',
         resource_id=filename,
-        additional_data={'file_size': os.path.getsize(file_path)},
+        additional_data={'file_size': file_record['file_size']},
         tenant_id=tenant_id
     )
     

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from sqlalchemy.exc import SQLAlchemyError
 from database import MasterSessionLocal, db
 from models import SystemAuditLog
@@ -73,6 +74,49 @@ class SysLogService:
         'HIGH': 'HIGH',
         'CRITICAL': 'CRITICAL'
     }
+
+    @staticmethod
+    def mask_sensitive_data(data, field_type=None):
+        if not data:
+            return data
+        data_str = str(data)
+        if field_type == 'email' or '@' in data_str:
+            if '@' in data_str:
+                local, domain = data_str.split('@')
+                if len(local) > 2:
+                    masked_local = local[0] + '*' * (len(local) - 2) + local[-1]
+                else:
+                    masked_local = '*' * len(local)
+                
+                if '.' in domain:
+                    domain_parts = domain.split('.')
+                    masked_domain = domain_parts[0][0] + '*' * (len(domain_parts[0]) - 1)
+                    if len(domain_parts) > 1:
+                        masked_domain += '.' + '.'.join(domain_parts[1:])
+                    return f"{masked_local}@{masked_domain}"
+                else:
+                    return f"{masked_local}@{domain[0]}***"
+        if field_type == 'ip' or re.match(r'\d+\.\d+\.\d+\.\d+', data_str):
+            parts = data_str.split('.')
+            if len(parts) == 4:
+                return f"{parts[0]}.{parts[1]}.***.***.***"
+        if field_type == 'hash' or (len(data_str) > 32 and re.match(r'^[a-fA-F0-9]+$', data_str)):
+            return data_str[:8] + '*' * (len(data_str) - 8)
+        if field_type == 'tenant_id':
+            return f"tenant_***{str(data)[-1]}"
+        if field_type == 'user_id' and str(data).isdigit():
+            user_str = str(data)
+            if len(user_str) > 2:
+                return user_str[0] + '*' * (len(user_str) - 2) + user_str[-1]
+            else:
+                return '*' * len(user_str)
+        if field_type == 'sensitive':
+            if len(data_str) <= 3:
+                return '*' * len(data_str)
+            else:
+                return data_str[:2] + '*' * (len(data_str) - 4) + data_str[-2:]
+        
+        return data
     
     @staticmethod
     def logTheEvent(action_type, description, **kwargs):
@@ -115,9 +159,36 @@ class SysLogService:
         SysLogService.logTheEvent(action_type, description, **kwargs)
     
     @staticmethod
-    def logTenantEvent(tenant_id,action_type, description, **kwargs):
-        kwargs['tenant_id'] = str(tenant_id)
-        SysLogService.logTheEvent(action_type, description, **kwargs)
+    def logTenantEvent(tenant_id, action_type, description, admin_email=None, category='GENERAL', **kwargs):
+        try:
+            masked_kwargs = {}
+            for key, value in kwargs.items():
+                if key in ['resource_id', 'target_resource']:
+                    masked_kwargs[key] = SysLogService.mask_sensitive_data(value, 'sensitive')
+                elif key == 'ip_address':
+                    masked_kwargs[key] = SysLogService.mask_sensitive_data(value, 'ip')
+                elif 'email' in key.lower():
+                    masked_kwargs[key] = SysLogService.mask_sensitive_data(value, 'email')
+                elif 'hash' in key.lower():
+                    masked_kwargs[key] = SysLogService.mask_sensitive_data(value, 'hash')
+                else:
+                    masked_kwargs[key] = value
+            masked_admin_email = SysLogService.mask_sensitive_data(admin_email, 'email') if admin_email else None
+            with MasterSessionLocal() as session:
+                log_entry = SystemAuditLog(
+                    admin_email=masked_admin_email,
+                    action_type=action_type,
+                    action_description=description,
+                    action_category=category,
+                    target_tenant_id=str(tenant_id),
+                    ip_address=masked_kwargs.get('ip_address'),
+                    success=masked_kwargs.get('success', True),
+                )
+                session.add(log_entry)
+                session.commit()
+                
+        except Exception as e:
+            print(f" Audit logging error: {e}")
     
     @staticmethod
     def getSysLogs(limit=100, offset=0, filters=None):
