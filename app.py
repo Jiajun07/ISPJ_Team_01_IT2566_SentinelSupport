@@ -1815,7 +1815,11 @@ def confirm_upload(temp_id):
         with open(pending_path, 'rb') as f:
             file_data = f.read()
         
-        # Get metadata from form
+        # Get metadata from form first
+        sensitivity = (request.form.get('sensitivity') or 'Public').strip()
+        notes = (request.form.get('notes') or '').strip()
+        risk_type = (request.form.get('risk_type') or '').strip()
+        
         log_audit_event(
             action_type='FILE_UPLOAD_CONFIRMED',
             description=f"File upload confirmed and saved: {target_safe}",
@@ -1824,17 +1828,13 @@ def confirm_upload(temp_id):
             tenant_id=tenant_id,
             resource_id=target_safe,
             additional_data={
-                'file_size': size_final,
-                'file_hash': file_hash_final[:16],
+                'file_size': size,
+                'file_hash': file_hash[:16],
                 'sensitivity': sensitivity or "Unclassified",
                 'temp_id': temp_id
             }
         )
 
-        sensitivity = (request.form.get('sensitivity') or 'Public').strip()
-        notes = (request.form.get('notes') or '').strip()
-        risk_type = (request.form.get('risk_type') or '').strip()
-        
         # Determine MIME type
         import mimetypes
         mime_type, _ = mimetypes.guess_type(target_safe)
@@ -3003,15 +3003,14 @@ def login():
             # ✅ Try tenant admin login FIRST (if you have admin users)
             tenant_admin = authenticate_tenant_admin(email_input, password_input)
             if tenant_admin:
-    
-            log_tenant_event(
-                action_type='TENANT_ADMIN_LOGIN_SUCCESS',
-                description=f"Tenant admin login successful for {email_input} (tenant_{tenant_admin['tenant_id']})",
-                category='USER_ACTIVITY',
-                tenant_id=tenant_admin['tenant_id']
-            )
+                log_tenant_event(
+                    action_type='TENANT_ADMIN_LOGIN_SUCCESS',
+                    description=f"Tenant admin login successful for {email_input} (tenant_{tenant_admin['tenant_id']})",
+                    category='USER_ACTIVITY',
+                    tenant_id=tenant_admin['tenant_id']
+                )
 
-            print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
+                print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
                 session['tenant_id'] = tenant_admin['tenant_id']
                 session['tenant_schema'] = tenant_admin['schema_name']
                 session['user_type'] = 'tenant_admin'
@@ -3033,15 +3032,14 @@ def login():
                 authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
                 
                 if authenticated:
-    
-                log_tenant_event(
-                    action_type='USER_LOGIN_SUCCESS',
-                    description=f"User login successful for {email_input} (tenant_{authenticated['tenant_id']})",
-                    category='USER_ACTIVITY',
-                    tenant_id=authenticated['tenant_id']
-                )
+                    log_tenant_event(
+                        action_type='USER_LOGIN_SUCCESS',
+                        description=f"User login successful for {email_input} (tenant_{authenticated['tenant_id']})",
+                        category='USER_ACTIVITY',
+                        tenant_id=authenticated['tenant_id']
+                    )
 
-                # ✅ Skip email verification check (no column exists)
+                    # ✅ Skip email verification check (no column exists)
                     print(f"✅ User login for {email_input} in tenant {authenticated['tenant_id']}")
                     session['tenant_id'] = authenticated['tenant_id']
                     session['tenant_schema'] = authenticated['schema_name']
@@ -3058,14 +3056,14 @@ def login():
                     return redirect(url_for('myfiles'))
 
             log_tenant_event(
-            action_type='LOGIN_FAILED',
-            description=f"Login failed for email: {email_input}",
-            category='USER_ACTIVITY',
-            success=False,
-            tenant_id=None
-        )
+                action_type='LOGIN_FAILED',
+                description=f"Login failed for email: {email_input}",
+                category='USER_ACTIVITY',
+                success=False,
+                tenant_id=None
+            )
 
-        flash("❌ Invalid email or password.", "danger")
+            flash("❌ Invalid email or password.", "danger")
             print(f"❌ Login failed for {email_input}")
         
         except Exception as e:
