@@ -79,7 +79,7 @@
                 <div id="file-list" class="table-body">
                     {% if files %}
                         {% for file in files %}
-                        <div class="table-row" data-filename="{{ file.original_filename }}" data-bin-key="{{ file.bin_key }}">
+                        <div class="table-row" data-filename="{{ file.original_filename }}" data-bin-key="{{ file.document_id }}">
                             <div class="col name">
                                 <div class="file-cell">
                                     <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -96,14 +96,14 @@
                             </div>
                             <div class="col file-size">-</div>
                             <div class="col actions">
-                                <button class="action-btn restore-btn" title="Restore" data-bin-key="{{ file.bin_key }}">
+                                <button class="action-btn restore-btn" title="Restore" data-bin-key="{{ file.document_id }}">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M3 7v6h6M21 17v-6h-6"/>
                                         <path d="M16 5.34A9.956 9.956 0 0 0 12 3c-5.523 0-10 4.477-10 10"/>
                                         <path d="M8 18.66A9.956 9.956 0 0 0 12 21c5.523 0 10-4.477 10-10"/>
                                     </svg>
                                 </button>
-                                <button class="action-btn delete-btn" title="Delete Permanently" data-bin-key="{{ file.bin_key }}">
+                                <button class="action-btn delete-btn" title="Delete Permanently" data-bin-key="{{ file.document_id }}">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <polyline points="3 6 5 6 21 6"/>
                                         <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>

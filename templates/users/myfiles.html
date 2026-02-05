@@ -157,7 +157,7 @@
         <h2 id="share-modal-title" style="margin-bottom: 25px; font-size: 18px; font-weight: 600; color: #222;">Send the link for <span id="share-filename" style="font-weight: 700;"></span></h2>
         
         <div style="margin-bottom: 18px;">
-            <input type="email" id="share-email-input" placeholder="Add people to share file to" 
+            <input type="text" id="share-email-input" placeholder="Add people to share file to (comma-separated: email1@example.com, email2@example.com)" 
                    style="width: 100%; padding: 14px 15px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 14px; background-color: #f9f9f9; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
         </div>
         
@@ -588,7 +588,7 @@
     const sendShareBtn = document.getElementById("send-share-btn");
     let currentShareLink = null;
     let currentShareFilename = null;
-    let currentExchangeId = null;
+    let currentExchangeIds = [];  // Changed to array for multiple exchanges
 
     const showShareModal = (filename) => {
         currentShareFilename = filename;
@@ -596,7 +596,7 @@
         shareEmailInput.value = "";
         sharePasswordInput.value = "";
         currentShareLink = null;
-        currentExchangeId = null;
+        currentExchangeIds = [];  // Reset to empty array
         document.getElementById('enable-key-exchange').checked = false;
         document.getElementById('key-exchange-info').style.display = 'none';
         shareModal.style.display = "flex";
@@ -607,41 +607,48 @@
         shareModal.style.display = "none";
         currentShareLink = null;
         currentShareFilename = null;
-        currentExchangeId = null;
-    };
-
-    const generateShareLink = async () => {
-        try {
-            const response = await fetch('/generate_share_link', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    filename: currentShareFilename,
-                    password: sharePasswordInput.value || null,
-                    require_key_exchange: document.getElementById('enable-key-exchange').checked,
-                    exchange_id: currentExchangeId,
-                    recipient_email: shareEmailInput.value.trim() || null
-                })
-            });
-            const data = await response.json();
-            if (response.ok) {
-                currentShareLink = data.share_link;
-                return data.share_link;
-            } else {
-                showMessage(data.error || "Failed to generate share link", "error");
-                return null;
-            }
-        } catch (err) {
-            showMessage("Failed to generate share link", "error");
-            return null;
-        }
+        currentExchangeIds = [];
     };
 
     copyLinkBtn.addEventListener("click", async () => {
-        if (!currentShareLink) {
-            currentShareLink = await generateShareLink();
-        }
-        if (currentShareLink) {
+        const isKeyExchangeEnabled = document.getElementById('enable-key-exchange').checked;
+        const password = sharePasswordInput.value || null;
+        
+        try {
+            // Generate link without requiring email - use first email if provided, otherwise null
+            let exchangeId = null;
+            let recipientEmail = null;
+            
+            const emailsInput = shareEmailInput.value.trim();
+            if (emailsInput) {
+                const emails = emailsInput.split(',').map(email => email.trim()).filter(email => email && email.includes('@'));
+                if (emails.length > 0) {
+                    recipientEmail = emails[0];
+                    if (isKeyExchangeEnabled) {
+                        exchangeId = currentExchangeIds.find(ex => ex.email === recipientEmail)?.exchange_id;
+                    }
+                }
+            }
+            
+            const response = await fetch('/generate_share_link', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filename: currentShareFilename,
+                    password: password,
+                    require_key_exchange: isKeyExchangeEnabled,
+                    exchange_id: exchangeId || null,
+                    recipient_email: recipientEmail || null
+                })
+            });
+            
+            const data = await response.json();
+            if (!response.ok) {
+                showMessage(data.error || "Failed to generate share link", "error");
+                return;
+            }
+            
+            currentShareLink = data.share_link;
             navigator.clipboard.writeText(currentShareLink).then(() => {
                 const toast = document.getElementById("toast-notification");
                 toast.style.display = "block";
@@ -651,6 +658,9 @@
             }).catch(() => {
                 prompt("Copy this share link:", currentShareLink);
             });
+        } catch (err) {
+            console.error(err);
+            showMessage("Failed to generate share link", "error");
         }
     });
 
@@ -660,75 +670,135 @@
 
     document.getElementById('enable-key-exchange').addEventListener('change', async (e) => {
         if (e.target.checked && currentShareFilename) {
+            const emailsInput = shareEmailInput.value.trim();
+            if (!emailsInput) {
+                alert('Please enter at least one recipient email address to enable key exchange');
+                e.target.checked = false;
+                return;
+            }
+            
+            // Parse comma-separated emails
+            const emails = emailsInput.split(',').map(email => email.trim()).filter(email => email && email.includes('@'));
+            if (emails.length === 0) {
+                alert('Please enter valid email addresses (comma-separated)');
+                e.target.checked = false;
+                return;
+            }
+            
             try {
-                const response = await fetch('/initiate_key_exchange', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        filename: currentShareFilename,
-                        recipient_email: shareEmailInput.value.trim() || 'pending'
-                    })
-                });
-                const data = await response.json();
-                if (data.success) {
-                    currentExchangeId = data.exchange_id;
-                    document.getElementById('sharer-fingerprint').textContent = data.sharer_fingerprint;
-                    document.getElementById('key-exchange-info').style.display = 'block';
-                } else {
-                    alert('Failed to initiate key exchange: ' + data.error);
-                    e.target.checked = false;
+                // Initiate key exchanges for each recipient
+                currentExchangeIds = [];
+                for (const email of emails) {
+                    const response = await fetch('/initiate_key_exchange', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            filename: currentShareFilename,
+                            recipient_email: email
+                        })
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        currentExchangeIds.push({
+                            email: email,
+                            exchange_id: data.exchange_id,
+                            fingerprint: data.sharer_fingerprint
+                        });
+                    } else {
+                        throw new Error(`Failed for ${email}: ${data.error}`);
+                    }
                 }
+                
+                // Show fingerprint info for all recipients
+                const fingerprintText = currentExchangeIds.map(ex => `${ex.email}: ${ex.fingerprint}`).join('<br>');
+                document.getElementById('sharer-fingerprint').innerHTML = fingerprintText;
+                document.getElementById('key-exchange-info').style.display = 'block';
             } catch (err) {
                 console.error(err);
-                alert('Failed to initiate key exchange');
+                alert('Failed to initiate key exchange: ' + err.message);
                 e.target.checked = false;
+                currentExchangeIds = [];
             }
         } else {
             document.getElementById('key-exchange-info').style.display = 'none';
-            currentExchangeId = null;
+            currentExchangeIds = [];
         }
     });
 
     sendShareBtn.addEventListener("click", async () => {
-        const email = shareEmailInput.value.trim();
+        const emailsInput = shareEmailInput.value.trim();
         
-        if (!currentShareLink) {
-            currentShareLink = await generateShareLink();
+        if (!emailsInput) {
+            showMessage("Please enter at least one email address", "error");
+            return;
         }
         
-        if (!currentShareLink) return;
-
-        if (email) {
-            // Send email with share link
-            try {
-                const response = await fetch('/send_share_email', {
+        // Parse comma-separated emails
+        const emails = emailsInput.split(',').map(email => email.trim()).filter(email => email && email.includes('@'));
+        if (emails.length === 0) {
+            showMessage("Please enter valid email addresses", "error");
+            return;
+        }
+        
+        const isKeyExchangeEnabled = document.getElementById('enable-key-exchange').checked;
+        const password = sharePasswordInput.value || null;
+        
+        try {
+            // Send to each recipient
+            for (const email of emails) {
+                // Generate a share link for this recipient
+                let exchangeId = null;
+                if (isKeyExchangeEnabled) {
+                    exchangeId = currentExchangeIds.find(ex => ex.email === email)?.exchange_id;
+                    if (!exchangeId) {
+                        showMessage(`Failed to create share link for ${email}`, "error");
+                        continue;
+                    }
+                }
+                
+                const response = await fetch('/generate_share_link', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        email: email,
-                        share_link: currentShareLink,
-                        filename: currentShareFilename
+                    body: JSON.stringify({
+                        filename: currentShareFilename,
+                        password: password,
+                        require_key_exchange: isKeyExchangeEnabled,
+                        exchange_id: exchangeId,
+                        recipient_email: email
                     })
                 });
+                
                 const data = await response.json();
-                if (response.ok) {
-                    showMessage("Share link sent successfully!", "success");
-                    hideShareModal();
-                } else {
-                    showMessage(data.error || "Failed to send email", "error");
+                if (!response.ok) {
+                    showMessage(`Failed to create link for ${email}: ${data.error}`, "error");
+                    continue;
                 }
-            } catch (err) {
-                showMessage("Failed to send email", "error");
+                
+                const shareLink = data.share_link;
+                
+                // Send email with share link
+                const emailResponse = await fetch('/send_share_email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: email,
+                        share_link: shareLink,
+                        filename: currentShareFilename,
+                        key_exchange_enabled: isKeyExchangeEnabled
+                    })
+                });
+                
+                if (!emailResponse.ok) {
+                    showMessage(`Failed to send email to ${email}`, "error");
+                } else {
+                    showMessage(`Share link sent to ${email}!`, "success");
+                }
             }
-        } else {
-            // Just copy the link
-            navigator.clipboard.writeText(currentShareLink).then(() => {
-                showMessage("Share link copied to clipboard!", "success");
-                hideShareModal();
-            }).catch(() => {
-                prompt("Copy this share link:", currentShareLink);
-                hideShareModal();
-            });
+            
+            hideShareModal();
+        } catch (err) {
+            console.error(err);
+            showMessage("Failed to share file", "error");
         }
     });
 

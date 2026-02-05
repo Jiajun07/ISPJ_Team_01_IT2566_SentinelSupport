@@ -1027,32 +1027,6 @@ def generate_fingerprint(public_key_pem):
     return fingerprint.upper()
 
 
-def create_key_exchange(sharer_id, sharer_tenant, recipient_email, filename, recipient_tenant):
-    """Create a key exchange request"""
-    exchange_id = secrets.token_urlsafe(32)
-    sharer_public_key = get_or_create_user_key(sharer_id, sharer_tenant)
-
-    key_exchanges = load_key_exchanges()
-    key_exchanges[exchange_id] = {
-        "exchange_id": exchange_id,
-        "sharer_id": sharer_id,
-        "sharer_tenant": sharer_tenant,
-        "sharer_public_key": sharer_public_key,
-        "recipient_email": recipient_email,
-        "recipient_tenant": recipient_tenant,
-        "filename": filename,
-        "status": "pending",
-        "created": datetime.now().isoformat(),
-        "recipient_verified": False,
-        "sharer_verified": False,
-        "recipient_confirmed": False,
-        "recipient_public_key": None
-    }
-    save_key_exchanges(key_exchanges)
-
-    return exchange_id, sharer_public_key
-
-
 def log_share_link(share_token, filename, owner, tenant_id, base_url, has_password=False):
     """Log share link generation to text file"""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1817,6 +1791,24 @@ def confirm_upload(temp_id):
         target_name = request.form.get('name') or original_name
         target_safe = sanitize_filename(target_name)
         
+        # Check if a file with this name already exists
+        existing = get_file_from_db(tenant_id, filename=target_safe)
+        if existing:
+            # File with same name exists - auto-rename to create a new file
+            base_name, file_ext = target_safe.rsplit('.', 1) if '.' in target_safe else (target_safe, '')
+            counter = 1
+            while True:
+                if file_ext:
+                    new_name = f"{base_name} ({counter}).{file_ext}"
+                else:
+                    new_name = f"{base_name} ({counter})"
+                
+                existing = get_file_from_db(tenant_id, filename=new_name)
+                if not existing:
+                    target_safe = new_name
+                    break
+                counter += 1
+        
         # Read file data for database storage
         with open(pending_path, 'rb') as f:
             file_data = f.read()
@@ -1869,7 +1861,7 @@ def confirm_upload(temp_id):
         
         if result.get('success'):
             flash(f"✅ File '{target_safe}' uploaded successfully!", "success")
-            return redirect(url_for('file_detail', filename=target_safe, tenant=tenant_id))
+            return redirect(url_for('myfiles'))
         else:
             flash(f"❌ Failed to upload file: {result.get('error')}", "danger")
             return redirect(url_for('myfiles'))
@@ -2286,7 +2278,7 @@ def delete_file():
             category='FILE_MANAGEMENT',
             target_resource='FILE',
             resource_id=filename,
-            additional_data={'bin_key': bin_key},
+            additional_data={'document_id': document_id},
             tenant_id=tenant_id
         )
         

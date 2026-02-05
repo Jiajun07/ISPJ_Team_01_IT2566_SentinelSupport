@@ -165,6 +165,19 @@
 }
 </style>
 
+<form id="upload-form" class="upload-form" aria-label="Upload files">
+    <input
+        type="file"
+        id="file-input"
+        name="file"
+        class="file-input visually-hidden"
+        accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt"
+        required
+    >
+    <div id="message" class="message"></div>
+    <button type="submit" class="visually-hidden">Upload</button>
+</form>
+
 <script>
     const existingFiles = {{ files | tojson | safe }};
     const fileVersions = {};
@@ -178,6 +191,66 @@
         const size = bytes / Math.pow(1024, power);
         return `${size.toFixed(1)} ${units[power]}`;
     };
+
+    const allowedExtensions = ["pdf", "doc", "docx", "png", "jpg", "jpeg", "txt"];
+    const form = document.getElementById("upload-form");
+    const uploadTrigger = document.getElementById("upload-trigger");
+    const fileInput = document.getElementById("file-input");
+    const messageEl = document.getElementById("message");
+
+    const showMessage = (text, type) => {
+        messageEl.textContent = text;
+        messageEl.className = `message ${type}`;
+    };
+
+    const handleUpload = async (file) => {
+        const ext = file.name.split(".").pop().toLowerCase();
+        if (!allowedExtensions.includes(ext)) {
+            showMessage("Invalid file type. Please choose a supported format.", "error");
+            fileInput.value = "";
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const response = await fetch(`/upload/temp`, { method: "POST", body: formData });
+            const data = await response.json();
+
+            if (!response.ok || data.error) {
+                showMessage(data.error || `Upload failed (status ${response.status}).`, "error");
+                return;
+            }
+
+            if (data.confirm_url) {
+                window.location.href = data.confirm_url;
+            } else {
+                showMessage("Upload succeeded but no confirm URL returned.", "error");
+            }
+        } catch (err) {
+            showMessage("Upload failed. Please try again.", "error");
+        }
+    };
+
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const file = fileInput.files[0];
+        if (!file) {
+            showMessage("Please pick a file to upload.", "error");
+            return;
+        }
+        handleUpload(file);
+    });
+
+    uploadTrigger.addEventListener("click", () => fileInput.click());
+
+    fileInput.addEventListener("change", (event) => {
+        const file = event.target.files[0];
+        if (file) {
+            handleUpload(file);
+        }
+    });
 
     const addFileRow = (file) => {
         const row = document.createElement("div");
