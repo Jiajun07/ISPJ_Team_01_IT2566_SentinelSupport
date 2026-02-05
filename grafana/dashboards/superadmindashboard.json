@@ -1,0 +1,78 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "SentinelSupport Dashboard",
+    "tags": ["sentinel", "security"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Client Databases Status",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "client_databases_total",
+            "format": "table",
+            "legendFormat": "{{status}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Compliance Score",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "compliance_score",
+            "legendFormat": "Compliance %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 60},
+                {"color": "green", "value": 80}
+              ]
+            },
+            "unit": "percent",
+            "min": 0,
+            "max": 100
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "System Health",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "system_health",
+            "legendFormat": "{{component}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Events Rate",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(events_total[5m])",
+            "legendFormat": "{{type}} - {{severity}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s"
+  }
+}

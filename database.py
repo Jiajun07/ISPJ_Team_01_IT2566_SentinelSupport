@@ -32,6 +32,9 @@ class Tenant(db.Model):
     company_name = db.Column(db.String(255), nullable=False, unique=True)
     status = db.Column(db.String(20), default='active')
     created_at = db.Column(db.DateTime, default=db.func.now())
+    is_active = db.Column(db.Boolean, default=True)
+    archived_at = db.Column(db.DateTime)
+
 
 
 class User(db.Model):
@@ -170,14 +173,47 @@ def get_all_tenants():
 
 
 def archive_tenant(tenant_id: int):
-    """Archive on subscription end"""
-    result = db.session.execute(
-        text("UPDATE tenants SET status = 'archived' WHERE id = :tid RETURNING *"),
-        {"tid": tenant_id}
-    )
-    tenant = result.fetchone()
-    db.session.commit()
-    return tenant
+    """Mark tenant as archived (soft delete)"""
+    tenant = Tenant.query.get(tenant_id)
+    if tenant:
+        tenant.is_active = False  # ✅ CHANGES STATUS
+        tenant.archived_at = datetime.now(UTC)  # ✅ SETS ARCHIVE DATE
+        db.session.commit()  # ✅ SAVES TO DATABASE
+        print(f"✅ Tenant {tenant_id} archived: is_active=False")
+        return True
+    print(f"❌ Tenant {tenant_id} not found")
+    return False
+
+
+def get_tenant_security_status(tenant_id: int):
+    """Get current security settings for tenant dashboard"""
+    security = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
+
+    if not security:
+        return {
+            'mfa_enabled': False,
+            'dlp_enabled': False,
+            'dlp_rule_count': 0,
+            'retention_days': 365
+        }
+
+    return {
+        'mfa_enabled': security.mfa_enabled or False,
+        'dlp_enabled': security.dlp_enabled or False,
+        'dlp_rule_count': getattr(security, 'dlp_rule_count', 0),
+        'retention_days': security.data_retention_days or 365
+    }
+
+
+def reactivate_tenant(tenant_id: int):
+    """Reactivate archived tenant"""
+    tenant = Tenant.query.get(tenant_id)
+    if tenant:
+        tenant.is_active = True
+        tenant.archived_at = None
+        db.session.commit()
+        return True
+    return False
 
 
 def get_tenant_stats(tenant_id):
@@ -195,9 +231,11 @@ def get_tenant_stats(tenant_id):
     return {
         'total_users': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".users')).scalar(),
         'total_documents': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".documents')).scalar(),
+        'audit_logs': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".audit_logs')).scalar(),  # ✅ NEW LINE
         'cleaned_today': cleaned_today,
         'retention_days': security.data_retention_days if security else 365
     }
+
 
 
 # Raw engine for non-Flask context (tests)

@@ -4,23 +4,74 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SentinelSupport</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-
 <header class="top-bar">
-    <!-- ✅ FIXED: Pass tenant_id -->
-    <a class="homeclick" href="{{ url_for('tenant_dashboard', tenant_id=tenant_id) }}">
-        <div class="logo-container">
-            <img src="{{ url_for('static', filename='img/logo.png') }}" class="logo" alt="Logo">
+    <!-- Logo/Home Link -->
+    <div class="logo-section">
+        <a class="homeclick" href="{{ url_for('tenant_dashboard', tenant_id=tenant_id) }}">
+            <div class="logo-container">
+                <img src="{{ url_for('static', filename='img/logo.png') }}" class="logo" alt="Logo">
+            </div>
+            <h1 class="title">SentinelSupport</h1>
+        </a>
+    </div>
+
+    <!-- Admin Dropdown Menu -->
+    <div class="admin-menu">
+        <div class="dropdown">
+            <button class="btn btn-outline-light dropdown-toggle fw-bold" type="button"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="fas fa-cog me-2"></i>Admin
+                <span class="tenant-badge ms-2">{{ tenant_id }}</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end shadow-lg" style="min-width: 220px;">
+                <!-- Security Baselines -->
+                <li>
+                    <a class="dropdown-item fw-semibold" href="{{ url_for('tenant_security_baselines', tenant_id=tenant_id) }}">
+                        <i class="fas fa-shield-alt me-2 text-primary"></i>
+                        Security Baselines
+                    </a>
+                </li>
+
+                <!-- Tenant Deactivate -->
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item fw-semibold text-warning" href="{{ url_for('tenant_deactivate', tenant_id=tenant_id) }}">
+                        <i class="fas fa-power-off me-2"></i>
+                        Deactivate Tenant
+                    </a>
+                </li>
+
+                <!-- Tenant Recovery -->
+                <li>
+                    <a class="dropdown-item fw-semibold text-success" href="{{ url_for('tenant_recovery', tenant_id=tenant_id) }}">
+                        <i class="fas fa-undo me-2"></i>
+                        Recover Tenant
+                    </a>
+                </li>
+
+                <!-- Logout -->
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item fw-semibold text-danger" href="{{ url_for('logout') }}">
+                        <i class="fas fa-sign-out-alt me-2"></i>
+                        Logout
+                    </a>
+                </li>
+            </ul>
         </div>
-        <h1 class="title">SentinelSupport</h1>
-    </a>
+    </div>
 </header>
 
 <div class="content">
     {% block content %}{% endblock %}
 </div>
 
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

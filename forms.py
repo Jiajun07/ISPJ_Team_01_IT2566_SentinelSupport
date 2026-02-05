@@ -66,6 +66,10 @@ class SecurityBaselineForm(FlaskForm):
     rls_enabled = BooleanField('Enable RLS (Row Level Security)', default=True)
     submit = SubmitField('Apply Security Baselines')
 
+class TenantRecoveryForm(FlaskForm):
+    confirm_recovery = BooleanField('Confirm tenant reactivation', validators=[DataRequired()])
+    submit = SubmitField('Reactivate Tenant')
+
 
 
 class ForgetPasswordForm(FlaskForm):

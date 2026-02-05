@@ -1,24 +1,40 @@
 # app.py
+
+#Note: All Log Audit Events is Gavier's. If have issues, just call me if urgent. I might not see the text
+
 import bcrypt
 import os
 import hashlib
 import base64
 import secrets
+import zipfile
+import shutil
+import psutil
+import time
+import subprocess
+import smtplib
+import re
+import json
+import atexit
+from webbrowser import get
 from dotenv import load_dotenv
+from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash, current_app
 from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash, flash, current_app, send_file
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
 from database import (db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin,
                       TenantSecurity, apply_rls_policies, authenticate_user, find_user_by_email, get_verification_code,
-                      mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code, retention_cleanup,
+                      mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code,
+                      retention_cleanup, reactivate_tenant, get_tenant_security_status,
                       store_file_in_db, add_file_version, get_file_from_db, get_all_files_for_tenant, 
                       get_file_versions_from_db, delete_file_from_db, restore_file_from_db, update_file_metadata,
                       create_share_link, get_share_link_by_token, update_share_link_access,
                       create_key_exchange, get_key_exchange, update_key_exchange, log_sharing_activity)
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
-from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm, SecurityBaselineForm
+from forms import (Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm,
+                   SecurityBaselineForm, TenantRecoveryForm)
 from werkzeug.security import generate_password_hash, check_password_hash
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -27,19 +43,16 @@ from DLPScannerModules.DLPScanner import DLPScanner
 from DLPScannerModules.FileProcessor import FileProcessor
 from datetime import datetime, timedelta
 from sqlalchemy import text
-import smtplib
-import re
-import json
 from database import archive_tenant, get_tenant_stats, Tenant
-import subprocess
 from forms import BackupRecoveryForm
-import zipfile
-import shutil
+from AuditService.LogService import SysLogService
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from apscheduler.schedulers.background import BackgroundScheduler
-import atexit
+from collections import defaultdict, deque
+
+load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
@@ -269,6 +282,19 @@ UPLOAD_FOLDER = os.path.join(app.root_path, 'DLPScannerModules', 'testfiles', 'u
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads")
+app.config['PENDING_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads_pending")
+app.config['VERSIONS_FOLDER'] = os.path.join(os.path.dirname(__file__), "uploads", "versions")
+VERSIONS_JSON = os.path.join(os.path.dirname(__file__), "file_versions.json")
+ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "png", "jpg", "jpeg", "txt"}
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(app.config['PENDING_FOLDER'], exist_ok=True)
+os.makedirs(app.config['VERSIONS_FOLDER'], exist_ok=True)
+
+configPath = os.path.join(app.root_path, "config", "keywords.json")
+fileConfigPath = os.path.join(app.root_path, "config", "supportedfiles.json")
+dlpScanner = DLPScanner(configPath)
+fileProcessor = FileProcessor(fileConfigPath)
 
 csrf = CSRFProtect(app)
 
@@ -285,6 +311,54 @@ def handle_exception(e):
     
     # Re-raise the exception so Flask can handle it normally
     raise
+
+performance_metrics = {
+    'response_times': deque(maxlen=1000),  
+    'api_requests': defaultdict(int),      
+    'api_errors': defaultdict(int),        
+    'total_requests': 0,
+    'total_errors': 0,
+    'start_time': time.time()
+}
+
+@app.before_request
+def before_request():
+    g.start_time = time.time()
+    performance_metrics['total_requests'] += 1
+    endpoint = request.endpoint or 'unknown'
+    is_ajax = (
+        request.headers.get('X-Requested-With') == 'XMLHttpRequest' or
+        request.headers.get('Content-Type', '').startswith('application/json') or
+        request.headers.get('Accept', '').startswith('application/json')
+    )
+    if (request.path.startswith('/api/') or 
+        is_ajax or 
+        request.headers.get('Content-Type') == 'application/json'):
+        performance_metrics['api_requests'][endpoint] += 1
+
+@app.after_request
+def after_request(response):
+    try:
+        if hasattr(g, 'start_time'):
+            response_time = (time.time() - g.start_time) * 1000
+            performance_metrics['response_times'].append(response_time)
+            if response.status_code >= 400:
+                performance_metrics['total_errors'] += 1
+                endpoint = request.endpoint or 'unknown'
+                is_ajax = (
+                    request.headers.get('X-Requested-With') == 'XMLHttpRequest' or
+                    request.headers.get('Content-Type', '').startswith('application/json') or
+                    request.headers.get('Accept', '').startswith('application/json')
+                )
+                
+                if (request.path.startswith('/api/') or 
+                    is_ajax or 
+                    request.headers.get('Content-Type') == 'application/json'):
+                    performance_metrics['api_errors'][endpoint] += 1
+    except Exception as e:
+        print(f"Error tracking response metrics: {e}")
+    
+    return response
 
 
 def get_current_tenant():
@@ -312,14 +386,13 @@ def sanitize_filename(filename):
     filename = re.sub(r'\s+', ' ', filename)
     return filename if filename else 'unnamed'
 
-configPath = os.path.join(app.root_path, "config", "keywords.json")
-fileConfigPath = os.path.join(app.root_path, "config", "supportedfiles.json")
-
-dlpScanner = DLPScanner(configPath)
-fileProcessor = FileProcessor(fileConfigPath)
-
 @app.route("/", methods=["GET", "POST"])
 def home():
+    log_audit_event(
+        action_type='HOME_ACCESS',
+        description="User accessed home page",
+        category='USER_ACTIVITY'
+    )
     return render_template("front_page.html")
 
 
@@ -517,6 +590,16 @@ def myfiles():
     tenant_id = get_current_tenant()
     user_email = session.get('email', 'Unknown')
     files = get_uploaded_files()
+
+    #log audit event
+    log_audit_event(
+        action_type='FILE_LIST_ACCESS',
+        description=f"User accessed file list (tenant_{tenant_id})",
+        category='FILE_MANAGEMENT',
+        target_resource='FILE_LIST',
+        additional_data={'file_count': len(files)}
+    )
+
     return render_template("users/myfiles.html", files=files, tenant_id=tenant_id, account_name=user_email)
 
 
@@ -589,7 +672,17 @@ def shared_with_me():
     
     except Exception as e:
         print(f"❌ Error loading shared files: {e}")
-        return render_template("users/shared_with_me.html", files=[], tenant_id=tenant_id, account_name=user_email)
+        #log audit event
+    log_tenant_event(
+        action_type='SHARED_FILES_ACCESS',
+        description=f"User accessed shared files (tenant_{tenant_id})",
+        category='FILE_MANAGEMENT',
+        target_resource='SHARED_FILES',
+        tenant_id=tenant_id,
+        additional_data={'shared_file_count': len(tenant_shares)}
+    )
+    
+    return render_template("users/shared_with_me.html", files=[], tenant_id=tenant_id, account_name=user_email)
 
 
 # Share link storage (in production, use database)
@@ -1042,6 +1135,21 @@ def generate_share_link():
             details={'password_protected': bool(password), 'key_exchange': require_key_exchange}
         )
         
+        log_tenant_event(
+            action_type='SHARE_LINK_GENERATED',
+            description=f"Share link generated for file: {filename}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            tenant_id=tenant_id,
+            resource_id=filename,
+            additional_data={
+                'recipient_email': recipient_email,
+                'password_protected': bool(password),
+                'require_key_exchange': require_key_exchange,
+                'share_token': share_token[:8] + '...'
+            }
+        )
+
         return jsonify({
             'success': True,
             'share_link': share_url,
@@ -1614,13 +1722,36 @@ def file_detail(filename):
 @csrf.exempt
 def upload_temp():
     if 'file' not in request.files:
+        log_tenant_event(
+            action_type='FILE_UPLOAD_FAILED',
+            description="File upload failed: No file part in request",
+            category='FILE_MANAGEMENT',
+            tenant_id=get_current_tenant(),
+            success=False
+        )
         return jsonify({"error": "No file part in request"}), 400
 
     file = request.files['file']
     if not file or file.filename == "":
+        log_tenant_event(
+            action_type='FILE_UPLOAD_FAILED',
+            description="File upload failed: No file selected",
+            category='FILE_MANAGEMENT',
+            tenant_id=get_current_tenant(),
+            success=False
+        )
         return jsonify({"error": "No file selected"}), 400
 
     if not allowed_file(file.filename):
+        log_tenant_event(
+            action_type='FILE_UPLOAD_FAILED',
+            description=f"File upload failed: Invalid file type - {file.filename}",
+            category='FILE_MANAGEMENT',
+            success=False,
+            target_resource='FILE',
+            tenant_id=get_current_tenant(),
+            resource_id=file.filename
+        )
         return jsonify({"error": "Invalid file type"}), 400
 
     tenant_id = get_current_tenant()
@@ -1633,6 +1764,16 @@ def upload_temp():
     file.save(pending_path)
     size = os.path.getsize(pending_path)
     file_hash = compute_sha256(pending_path)
+
+    log_tenant_event(
+        action_type='FILE_UPLOAD_TEMP',
+        description=f"File uploaded to temporary storage: {safe_name}",
+        category='FILE_MANAGEMENT',
+        target_resource='FILE',
+        tenant_id=tenant_id,
+        resource_id=safe_name,
+        additional_data={'temp_id': temp_id, 'file_size': size, 'file_hash': file_hash[:16]}
+    )
 
     return jsonify({
         "confirm_url": url_for('confirm_upload', temp_id=temp_id, tenant=tenant_id),
@@ -1651,6 +1792,13 @@ def confirm_upload(temp_id):
     
     pending_path = _pending_path(temp_id)
     if not pending_path or not os.path.exists(pending_path):
+        log_tenant_event(
+            action_type='FILE_UPLOAD_CONFIRMATION_FAILED',
+            description=f"File upload confirmation failed: Pending file not found (temp_id: {temp_id})",
+            category='FILE_MANAGEMENT',
+            success=False,
+            tenant_id=tenant_id
+        )
         return "Pending file not found", 404
 
     pending_file = os.path.basename(pending_path)
@@ -1668,6 +1816,21 @@ def confirm_upload(temp_id):
             file_data = f.read()
         
         # Get metadata from form
+        log_audit_event(
+            action_type='FILE_UPLOAD_CONFIRMED',
+            description=f"File upload confirmed and saved: {target_safe}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            tenant_id=tenant_id,
+            resource_id=target_safe,
+            additional_data={
+                'file_size': size_final,
+                'file_hash': file_hash_final[:16],
+                'sensitivity': sensitivity or "Unclassified",
+                'temp_id': temp_id
+            }
+        )
+
         sensitivity = (request.form.get('sensitivity') or 'Public').strip()
         notes = (request.form.get('notes') or '').strip()
         risk_type = (request.form.get('risk_type') or '').strip()
@@ -1960,16 +2123,41 @@ def rename_file():
     new_name = data.get('new_name')
 
     if not old_name or not new_name:
+        log_tenant_event(
+            action_type='FILE_RENAME_FAILED',
+            description="File rename failed: Missing filename",
+            category='FILE_MANAGEMENT',
+            success=False,
+            tenant_id=tenant_id
+        )
         return jsonify({"error": "Missing filename"}), 400
 
     # Check if old file exists in database
     old_file = get_file_from_db(tenant_id, filename=old_name)
     if not old_file:
+        log_tenant_event(
+            action_type='FILE_RENAME_FAILED',
+            description=f"File rename failed: File not found - {old_name}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            resource_id=old_name,
+            success=False,
+            tenant_id=tenant_id
+        )
         return jsonify({"error": "File not found"}), 404
 
     # Check if new name already exists
     existing_new = get_file_from_db(tenant_id, filename=new_name)
     if existing_new:
+        log_tenant_event(
+            action_type='FILE_RENAME_FAILED',
+            description=f"File rename failed: File with new name already exists - {old_name} to {new_name}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            resource_id=old_name,
+            success=False,
+            tenant_id=tenant_id
+        )
         return jsonify({"error": "File with that name already exists"}), 409
 
     try:
@@ -1989,6 +2177,15 @@ def rename_file():
         session.commit()
         session.close()
         
+        log_tenant_event(
+            action_type='FILE_RENAMED',
+            description=f"File renamed: {old_name} to {new_name}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            resource_id=new_name,
+            additional_data={'old_name': old_name},
+            tenant_id=tenant_id
+        )
         return jsonify({"message": "File renamed successfully"}), 200
     except Exception as e:
         print(f"❌ Error renaming file: {e}")
@@ -1997,6 +2194,15 @@ def rename_file():
             session.close()
         except:
             pass
+        log_tenant_event(
+            action_type='FILE_RENAME_ERROR',
+            description=f"File rename error: {old_name} to {new_name} - {str(e)}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            resource_id=old_name,
+            success=False,
+            tenant_id=tenant_id
+        )
         return jsonify({"error": str(e)}), 500
 
 
@@ -2033,11 +2239,27 @@ def delete_file():
     filename = data.get('filename')
 
     if not filename:
+        log_tenant_event(
+            action_type='FILE_DELETE_FAILED',
+            description="File delete failed: Missing filename",
+            category='FILE_MANAGEMENT',
+            success=False,
+            tenant_id=tenant_id
+        )
         return jsonify({"error": "Missing filename"}), 400
 
     # Get file from database
     file_record = get_file_from_db(tenant_id, filename=filename)
     if not file_record:
+        log_tenant_event(
+            action_type='FILE_DELETE_FAILED',
+            description=f"File delete failed: File not found - {filename}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            resource_id=filename,
+            success=False,
+            tenant_id=tenant_id
+        )
         return jsonify({"error": "File not found"}), 404
 
     try:
@@ -2051,10 +2273,29 @@ def delete_file():
         
         # TODO: Remove from shared_with_me for other users (update sharing table)
         # TODO: Deactivate share links pointing to this file (update file_sharing_links table)
+
+        log_tenant_event(
+            action_type='FILE_MOVED_TO_BIN',
+            description=f"File moved to bin: {filename}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            resource_id=filename,
+            additional_data={'bin_key': bin_key},
+            tenant_id=tenant_id
+        )
         
         return jsonify({"message": "File moved to bin", "document_id": document_id}), 200
     except Exception as e:
         print(f"❌ Error deleting file: {e}")
+        log_tenant_event(
+            action_type='FILE_DELETE_ERROR',
+            description=f"File delete error: {filename} - {str(e)}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            resource_id=filename,
+            success=False,
+            tenant_id=tenant_id
+        )
         return jsonify({"error": str(e)}), 500
 
 
@@ -2202,6 +2443,29 @@ def download_file(filename):
     if not file_record:
         flash("File not found", "danger")
         return redirect(url_for('myfiles'))
+
+    if not os.path.exists(file_path):
+        log_tenant_event(
+            action_type='FILE_DOWNLOAD_FAILED',
+            description=f"File download failed: File not found - {filename}",
+            category='FILE_MANAGEMENT',
+            target_resource='FILE',
+            resource_id=filename,
+            success=False,
+            tenant_id=tenant_id
+        )
+        return "File not found", 404
+    
+    log_tenant_event(
+        action_type='FILE_DOWNLOADED',
+        description=f"File downloaded: {filename}",
+        category='FILE_MANAGEMENT',
+        target_resource='FILE',
+        resource_id=filename,
+        additional_data={'file_size': os.path.getsize(file_path)},
+        tenant_id=tenant_id
+    )
+    
     
     # Create BytesIO object from blob data
     file_data = BytesIO(file_record['file_data'])
@@ -2297,6 +2561,13 @@ def company_signup():
 
     if form.validate_on_submit():
         try:
+            log_tenant_event(
+                action_type='COMPANY_SIGNUP_ATTEMPT',
+                description=f"Company signup attempt: {form.company_name.data}",
+                category='TENANT_MANAGEMENT',
+                tenant_id=None
+            )
+
             # 1. Create tenant record
             tenant = Tenant(company_name=form.company_name.data)
             db.session.add(tenant)
@@ -2483,6 +2754,20 @@ def company_signup():
             db.session.commit()
             print(f"✅ tenant_{tenant_id} FULLY created with ALL tables!")
 
+            log_tenant_event(
+                action_type='COMPANY_SIGNUP_SUCCESS',
+                description=f"Company '{form.company_name.data}' created successfully (tenant_{tenant_id})",
+                category='TENANT_MANAGEMENT',
+                target_resource='TENANT',
+                tenant_id=tenant_id,
+                resource_id=str(tenant_id),
+                additional_data={
+                    'company_name': form.company_name.data,
+                    'admin_email': form.email.data,
+                    'region': form.company_region.data
+                }
+            )
+
             # 🔥 NEW: ADD SECURITY BASELINE (INSERT THESE 12 LINES)
             security = TenantSecurity(
                 tenant_id=tenant_id,
@@ -2503,6 +2788,13 @@ def company_signup():
             return redirect(url_for('login'))
 
         except Exception as e:
+            log_tenant_event(
+                action_type='COMPANY_SIGNUP_ERROR',
+                description=f"Company signup error for '{form.company_name.data}': {str(e)}",
+                category='TENANT_MANAGEMENT',
+                success=False,
+                tenant_id=None
+            )
             db.session.rollback()
             print(f"❌ ERROR: {e}")
             flash(f"❌ Failed: {str(e)}", "danger")
@@ -2512,53 +2804,29 @@ def company_signup():
 
 @app.route('/tenant/<int:tenant_id>/dashboard')
 def tenant_dashboard(tenant_id):
-    if not session.get('tenant_id') or session['tenant_id'] != tenant_id:
-        flash("Access denied.", "danger")
+    if session.get('tenant_id') != tenant_id:
+
+        log_tenant_event(
+            action_type='TENANT_DASHBOARD_ACCESS_DENIED',
+            description=f"Unauthorized access attempt to tenant {tenant_id} dashboard",
+            category='SECURITY',
+            success=False,
+            tenant_id=tenant_id
+        )
+
         return redirect(url_for('login'))
 
-    # ✅ DYNAMIC TENANT DATA
-    tenant = db.session.execute(
-        text("SELECT * FROM tenants WHERE id = :id"), {"id": tenant_id}
-    ).first()
-
-    if not tenant:
-        flash("Tenant not found.", "danger")
-        return redirect(url_for('login'))
-
-    # Company name, onboarding date, etc.
-    company_name = tenant.company_name
-    onboarding_date = tenant.created_at.strftime('%d/%m/%Y') if tenant.created_at else 'N/A'
-
-    # Security baselines (from our new table)
-    security = db.session.execute(
-        text("SELECT * FROM tenant_security WHERE tenant_id = :id"), {"id": tenant_id}
-    ).first()
-
-    security_status = {
-        'mfa_enabled': security.mfa_enabled if security else False,
-        'dlp_enabled': security.dlp_enabled if security else False,
-        'dlp_rule_count': security.dlp_rule_count if security else 0,
-        'retention_days': security.data_retention_days if security else 365
-    }
-
-    # Tenant stats (users, documents, etc.)
-    tenant_stats = {
-        'total_users': db.session.execute(
-            text(f'SELECT COUNT(*) FROM "tenant_{tenant_id}".users')
-        ).scalar(),
-        'total_documents': db.session.execute(
-            text(f'SELECT COUNT(*) FROM "tenant_{tenant_id}".documents')
-        ).scalar(),
-        'backups': get_last_backup(tenant_id)  # Your existing function
-    }
+    tenant = Tenant.query.get_or_404(tenant_id)  # ✅ Get tenant object
+    stats = get_tenant_stats(tenant_id)
+    security_status = get_tenant_security_status(tenant_id)  # ✅ NEW
 
     return render_template('CompanyAdmin/dashboard.html',
+                           tenant=tenant,  # ✅ Pass tenant
                            tenant_id=tenant_id,
-                           tenant=tenant,
-                           company_name=company_name,
-                           onboarding_date=onboarding_date,
-                           security_status=security_status,
-                           stats=tenant_stats)
+                           stats=stats,
+                           security_status=security_status,  # ✅ Pass security
+                           company_name=tenant.company_name,
+                           onboarding_date=tenant.created_at.strftime('%d/%m/%Y') if tenant.created_at else 'N/A')
 
 
 @app.teardown_appcontext
@@ -2573,95 +2841,118 @@ def list_documents():
     rows = session.execute("SELECT id, file_path, classification FROM documents").fetchall()
     return {"documents": [dict(r) for r in rows]}
 
-#Setting Backup and Recovery customization settings
-@app.route('/admin/backup-recovery/<int:tenant_id>', methods=['GET', 'POST'])
-def backup_recovery_page(tenant_id):
-    """Backup & Recovery settings page"""
-    tenant = Tenant.query.get_or_404(tenant_id)
-    stats = get_tenant_stats(tenant_id)
-    form = BackupRecoveryForm()
 
-    last_backup = get_last_backup(tenant_id)  # Your function
-    backups = list_backups(tenant_id)  # Your function
-
-    if form.validate_on_submit():
-        if form.backup_submit.data:
-            # Create backup
-            backup_file = backup_tenant(tenant_id)
-            flash(f"Backup created: {backup_file}", "success")
-
-        elif form.restore_submit.data:
-            # Handle restore
-            if form.backup_file.data:
-                filename = secure_filename(form.backup_file.data.filename)
-                restore_path = f"restores/{filename}"
-                form.backup_file.data.save(restore_path)
-
-                success = restore_backup(tenant_id, restore_path)
-                if success:
-                    flash("Restore completed successfully!", "success")
-                else:
-                    flash("Restore failed", "danger")
-
-    return render_template('admin/backup_recovery.html',
-                           tenant=tenant, stats=stats, form=form,
-                           last_backup=last_backup, backups=backups)
 
 # Deactivation of Tenant
-@app.route('/admin/tenant/<int:tenant_id>/deactivate', methods=['GET', 'POST'])
-def tenant_deactivate_page(tenant_id):
-    """Tenant deactivation page with WTForms"""
+@app.route('/tenant/<int:tenant_id>/deactivate', methods=['GET', 'POST'])
+def tenant_deactivate(tenant_id):
+    if session.get('tenant_id') != tenant_id:
+        return redirect(url_for('login'))
+
     tenant = Tenant.query.get_or_404(tenant_id)
     stats = get_tenant_stats(tenant_id)
     form = TenantDeactivateForm()
 
     if form.validate_on_submit():
-        # Form passed validation - process deactivation
         retention_days = int(form.retention_days.data)
-        archive_date = datetime.now() + timedelta(days=retention_days)
-
-        # Archive tenant
-        archived = archive_tenant(tenant_id)
+        archived = archive_tenant(tenant_id)  # ✅ This NOW WORKS
 
         if archived:
-            # Create backup
-            backup_file = backup_tenant(tenant_id)
-
-            flash(f"""
-                Tenant '{tenant.company_name}' archived successfully!<br>
-                Retention period: {retention_days} days<br>
-                Backup saved: {backup_file}
-            """, "success")
-            return redirect(url_for('admin_tenants'))
+            flash(f"✅ Tenant '{tenant.company_name}' archived for {retention_days} days!", "success")
         else:
-            flash("Failed to archive tenant", "danger")
+            flash("❌ Failed to archive tenant", "danger")
 
-    return render_template('admin/tenant_deactivate.html',
-                           tenant=tenant, stats=stats, form=form)
+        return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+
+    return render_template('CompanyAdmin/tenant_deactivate.html',
+                           tenant=tenant, stats=stats, form=form, tenant_id=tenant_id)
+
+
+#Setting Backup and Recovery customization settings
+
+
+@app.route('/tenant/<int:tenant_id>/recovery', methods=['GET', 'POST'])
+def tenant_recovery(tenant_id):
+    if session.get('tenant_id') != tenant_id:
+        return redirect(url_for('login'))
+
+    tenant = Tenant.query.get_or_404(tenant_id)
+    stats = get_tenant_stats(tenant_id)
+    form = TenantRecoveryForm()  # ✅ Create form
+
+    if form.validate_on_submit():
+        reactivated = reactivate_tenant(tenant_id)
+        if reactivated:
+            flash("✅ Tenant reactivated!", "success")
+        return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+
+    return render_template('CompanyAdmin/Tenant_Recovery.html',
+                           tenant=tenant, stats=stats, form=form, tenant_id=tenant_id)
+
+
 def backup_tenant(tenant_id: int):
-    """Create backup before archiving"""
+    """Create Supabase-compatible backup (no PgBouncer)"""
     schema = f"tenant_{tenant_id}"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_file = f"backups/{schema}_archive_{timestamp}.sql"
+    backup_file = f"backups/{schema}_backup_{timestamp}.sql"
 
+    # ✅ FIX: Separate host/port/username/database for pg_dump
     cmd = [
-        'pg_dump', '-h', 'localhost', '-p', '5432', '-U', 'postgres',
-        f'--schema={schema}', '--no-owner', '--no-privileges',
-        '-f', backup_file, 'sdsm_master'
+        'pg_dump',
+        '-h', 'aws-1-ap-south-1.pooler.supabase.com',
+        '-p', '5432',  # Direct port, NOT 6543 (PgBouncer)
+        '-U', 'postgres.ijbxuudpvxsjjdugewuj',
+        '-d', 'postgres',
+        f'--schema={schema}',
+        '--no-owner',
+        '--no-privileges',
+        '-f', backup_file
     ]
-    subprocess.run(cmd, env={"PGPASSWORD": "Jiajun07@@2025"})
-    return backup_file
+
+    # Create backups dir if missing
+    os.makedirs('backups', exist_ok=True)
+
+    result = subprocess.run(cmd,
+                            capture_output=True,
+                            text=True,
+                            env={"PGPASSWORD": "SentinelSupport*2026"})
+
+    if result.returncode == 0:
+        print(f"✅ Backup created: {backup_file}")
+        return backup_file
+    else:
+        print(f"❌ Backup failed: {result.stderr}")
+        return None  # Graceful failure
 
 
 @app.route('/tenant/<int:tenant_id>/security-baselines', methods=['GET', 'POST'])
 def tenant_security_baselines(tenant_id):
     if session.get('tenant_id') != tenant_id:
+
+        log_tenant_event(
+            action_type='SECURITY_BASELINES_ACCESS_DENIED',
+            description=f"Unauthorized access to security baselines for tenant {tenant_id}",
+            category='SECURITY',
+            success=False,
+            tenant_id=tenant_id
+        )
+
         return redirect(url_for('login'))
 
     tenant_security = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
     form = SecurityBaselineForm(obj=tenant_security)
 
     if form.validate_on_submit():
+
+        log_tenant_event(
+            action_type='SECURITY_BASELINES_UPDATE_ATTEMPT',
+            description=f"Security baselines update attempt for tenant {tenant_id}",
+            category='SECURITY',
+            target_resource='SECURITY_POLICY',
+            resource_id=str(tenant_id),
+            tenant_id=tenant_id
+        )
+
         if not tenant_security:
             tenant_security = TenantSecurity(tenant_id=tenant_id)
 
@@ -2672,6 +2963,20 @@ def tenant_security_baselines(tenant_id):
 
         # ✅ APPLY RLS POLICIES TO TENANT SCHEMA
         apply_rls_policies(tenant_id, tenant_security)
+
+        log_tenant_event(
+            action_type='SECURITY_BASELINES_UPDATED',
+            description=f"Security baselines updated successfully for tenant {tenant_id}",
+            category='SECURITY',
+            target_resource='SECURITY_POLICY',
+            resource_id=str(tenant_id),
+            tenant_id=tenant_id,
+            additional_data={
+                'mfa_enabled': tenant_security.mfa_enabled,
+                'dlp_enabled': tenant_security.dlp_enabled,
+                'rls_enabled': tenant_security.enable_rls
+            }
+        )
 
         flash("✅ Security baselines applied successfully!", "success")
         return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
@@ -2698,7 +3003,15 @@ def login():
             # ✅ Try tenant admin login FIRST (if you have admin users)
             tenant_admin = authenticate_tenant_admin(email_input, password_input)
             if tenant_admin:
-                print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
+    
+            log_tenant_event(
+                action_type='TENANT_ADMIN_LOGIN_SUCCESS',
+                description=f"Tenant admin login successful for {email_input} (tenant_{tenant_admin['tenant_id']})",
+                category='USER_ACTIVITY',
+                tenant_id=tenant_admin['tenant_id']
+            )
+
+            print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
                 session['tenant_id'] = tenant_admin['tenant_id']
                 session['tenant_schema'] = tenant_admin['schema_name']
                 session['user_type'] = 'tenant_admin'
@@ -2720,7 +3033,15 @@ def login():
                 authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
                 
                 if authenticated:
-                    # ✅ Skip email verification check (no column exists)
+    
+                log_tenant_event(
+                    action_type='USER_LOGIN_SUCCESS',
+                    description=f"User login successful for {email_input} (tenant_{authenticated['tenant_id']})",
+                    category='USER_ACTIVITY',
+                    tenant_id=authenticated['tenant_id']
+                )
+
+                # ✅ Skip email verification check (no column exists)
                     print(f"✅ User login for {email_input} in tenant {authenticated['tenant_id']}")
                     session['tenant_id'] = authenticated['tenant_id']
                     session['tenant_schema'] = authenticated['schema_name']
@@ -2736,7 +3057,15 @@ def login():
                     flash(f"✅ Welcome back, {email_input}! (tenant_{authenticated['tenant_id']})", "success")
                     return redirect(url_for('myfiles'))
 
-            flash("❌ Invalid email or password.", "danger")
+            log_tenant_event(
+            action_type='LOGIN_FAILED',
+            description=f"Login failed for email: {email_input}",
+            category='USER_ACTIVITY',
+            success=False,
+            tenant_id=None
+        )
+
+        flash("❌ Invalid email or password.", "danger")
             print(f"❌ Login failed for {email_input}")
         
         except Exception as e:
@@ -2749,6 +3078,21 @@ def login():
 
 @app.route('/logout')
 def logout():
+    # Audit Log Entry ===========================
+    if session.get('user_type') == 'tenant_admin' and session.get('tenant_id'):
+        SysLogService.logTenantEvent(
+            tenant_id=session['tenant_id'],
+            action_type='TENANT_USER_LOGOUT',
+            description=f"Tenant admin logout for {session.get('temp_user_email', 'unknown')}",
+            category='USER_ACTIVITY'
+        )
+    elif session.get('temp_user_email'):
+        SysLogService.logSystemAdminEvent(
+            action_type='SYSTEM_ADMIN_LOGOUT',
+            description=f"System admin logout for {session.get('temp_user_email', 'unknown')}"
+        )
+    # =============================================
+
     # Invalidate session token if it exists
     session_token = request.cookies.get('session_token')
     if session_token:
@@ -2953,10 +3297,51 @@ def verify_2fa():
             # ✅ LOGIN SUCCESS - Route by user_type
             if session.get('user_type') == 'tenant_admin':
                 # Tenant admin → Company dashboard
+
+                # For Audit Log Entry ====================
+                tenant_id = session['tenant_id']
+                SysLogService.logTenantEvent(
+                    tenant_id=tenant_id,
+                    action_type='TENANT_USER_LOGIN',
+                    description=f"Tenant admin login successful for {email}",
+                    admin_email=email,
+                    category='USER_ACTIVITY'
+                )
+                #=============================================
+                
+
                 return redirect(url_for('tenant_dashboard', tenant_id=session['tenant_id']))
             else:
                 # Regular user → Their dashboard
+
+                # Audit Log Entry ============================
+                SysLogService.logSystemAdminEvent(
+                    action_type='SYSTEM_ADMIN_LOGIN',
+                    description=f"System admin login successful for {email}",
+                    admin_email=email
+                )
+                #=============================================
+
                 return redirect(url_for('dashboard'))  # Your existing dashboard
+        # Audit Log Entry ============================
+        if session.get('user_type') == 'tenant_admin':
+            SysLogService.logTenantEvent(
+                tenant_id=session.get('tenant_id'),
+                action_type='TENANT_USER_LOGIN',
+                description=f"Failed 2FA attempt for {email}",
+                admin_email=email,
+                success=False,
+                category='USER_ACTIVITY'
+            )
+        else:
+            SysLogService.logSystemAdminEvent(
+                action_type='SYSTEM_ADMIN_LOGIN',
+                description=f"Failed 2FA attempt for {email}",
+                admin_email=email,
+                success=False
+            )
+        #=============================================
+                
 
         flash("Invalid 2FA code.", "danger")
 
@@ -3114,6 +3499,10 @@ def send_signup_verification_email(user_email, signup_code):
         return False
 
 
+#DLP Scanner-----------------------------------------------------------------------------------------------
+
+
+@csrf.exempt
 def policyEngine(file):
     try:
         if not fileProcessor.passedProcessing(file):
@@ -3134,17 +3523,41 @@ def policyEngine(file):
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
 
-@app.route('/autodlp', methods=['GET', 'POST'])
+
 @csrf.exempt
+@app.route('/autodlp', methods=['GET', 'POST'])
 def autodlp():
     result = None 
     savedFilePath = None
-    if request.method == 'POST':      
+    if request.method == 'POST':
+
+        log_system_admin_event(
+            action_type='DLP_SCAN_INITIATED',
+            description="DLP scan initiated from admin panel",
+            category='SECURITY'
+        )
+
         if 'file' not in request.files:
+
+            log_system_admin_event(
+                action_type='DLP_SCAN_FAILED',
+                description="DLP scan failed: No file part",
+                category='SECURITY',
+                success=False
+            )
+
             flash('No file part', 'error')
             return redirect(request.url)
         file = request.files['file']
         if file.filename == '':
+
+            log_system_admin_event(
+                action_type='DLP_SCAN_FAILED',
+                description="DLP scan failed: No file selected",
+                category='SECURITY',
+                success=False
+            )
+
             flash('No selected file', 'error')
             return redirect(request.url)
         if file and file.filename:
@@ -3160,16 +3573,47 @@ def autodlp():
                 file.seek(0)
                 result = policyEngine(file)
                 if 'status' in result and result['status'] == 'error':
+
+                    log_system_admin_event(
+                        action_type='DLP_SCAN_ERROR',
+                        description=f"DLP scan error for file {filename}: {result['message']}",
+                        category='SECURITY',
+                        target_resource='FILE',
+                        resource_id=filename,
+                        success=False
+                    )
+
                     flash(result['message'], 'error')
                     return redirect(request.url)
                 else:
                     decision = result.get('decision')
                     reasons = result.get('reasons', [])
+
+                    log_system_admin_event(
+                        action_type='DLP_SCAN_COMPLETED',
+                        description=f"DLP scan completed for {filename}: {decision.upper()}",
+                        category='SECURITY',
+                        target_resource='FILE',
+                        resource_id=filename,
+                        additional_data={
+                            'decision': decision,
+                            'reasons': result.get('reasons', [])
+                        }
+                    )
+
                     if decision == 'deny':
                         flash(f'File DENIED - {"; ".join(reasons)}', 'error') 
                     else:
                         flash(f'File ALLOWED - {"; ".join(reasons)}', 'success')   
             except Exception as e:
+
+                log_system_admin_event(
+                    action_type='DLP_SCAN_ERROR',
+                    description=f"DLP scan system error: {str(e)}",
+                    category='SECURITY',
+                    success=False
+                )
+
                 flash(f'Error saving file: {str(e)}', 'error')
                 return redirect(request.url)
     return render_template("SuperAdmin/autodlp.html",
@@ -3179,6 +3623,7 @@ def autodlp():
                             riskLevel=result.get('riskLevel') if result else None,
                             savedFilePath=savedFilePath)
 
+@csrf.exempt
 @app.route('/tenant-dlpscanning', methods=['GET', 'POST'])
 def tenant_dlpscanning():
     result = None 
@@ -3224,6 +3669,7 @@ def tenant_dlpscanning():
                          export_progress=92)
 
 
+@csrf.exempt
 @app.route('/debug')
 def debug():
     try:
@@ -3246,6 +3692,1073 @@ def debug():
             'traceback': traceback.format_exc(),
             'dlp_scanner_working': False
         }
+    
+#SYS HP Monitor-----------------------------------------------------------------------------------------------
+
+@csrf.exempt
+@app.route('/systemhealthmonitor')
+def systemHealthMonitor():
+    try:
+
+        log_system_admin_event(
+            action_type='SYSTEM_HEALTH_ACCESSED',
+            description="System health monitor accessed",
+            category='SYSTEM'
+        )
+
+        healthData = getSystemHealth()
+
+        log_system_admin_event(
+            action_type='SYSTEM_HEALTH_CHECK_COMPLETED',
+            description="System health check completed",
+            category='SYSTEM',
+            additional_data={
+                'app_health': healthData.get('appHP', 0),
+                'database_status': healthData.get('databaseStatus', 0),
+                'system_status': healthData.get('systemStatus', 0)
+            }
+        )
+
+        return render_template('SuperAdmin/systemhealthmonitor.html', **healthData)
+    except Exception as e:
+
+        log_system_admin_event(
+            action_type='SYSTEM_HEALTH_ERROR',
+            description=f"System health monitor error: {str(e)}",
+            category='SYSTEM',
+            success=False
+        )
+
+        error_data = {
+            'systemStatus': 0,
+            'databaseStatus': 0, 
+            'appHP': 1,
+            'database_message': f'Error retrieving system health: {str(e)}',
+            'database_details': {},
+            'system_info': {}
+        }
+
+        flash(f'Error retrieving system health: {str(e)}', 'error')
+        return render_template('SuperAdmin/systemhealthmonitor.html', **error_data)
+
+def calculate_performance_metrics():
+    """Calculate real-time performance metrics"""
+    try:
+        metrics = {}
+        response_times = list(performance_metrics['response_times'])
+        if response_times:
+            avg_response_time = sum(response_times) / len(response_times)
+            metrics['averageResponseTime'] = f"{avg_response_time:.1f}ms"
+        else:
+            metrics['averageResponseTime'] = "0ms"
+        total_api_requests = sum(performance_metrics['api_requests'].values())
+        total_api_errors = sum(performance_metrics['api_errors'].values())
+        
+        if total_api_requests > 0:
+            error_rate = (total_api_errors / total_api_requests) * 100
+            metrics['apiErrorRate'] = f"{error_rate:.1f}%"
+        else:
+            metrics['apiErrorRate'] = "0%"
+        metrics['totalAPIRequests'] = str(total_api_requests)
+        metrics['totalRequests'] = str(performance_metrics['total_requests'])
+        metrics['uptime'] = calculate_uptime()
+        
+        return metrics
+        
+    except Exception as e:
+        print(f"Error calculating performance metrics: {e}")
+        return {
+            'averageResponseTime': 'Error',
+            'apiErrorRate': 'Error',
+            'totalAPIRequests': 'Error'
+        }
+
+def calculate_uptime():
+    try:
+        uptime_seconds = time.time() - performance_metrics['start_time']
+        if uptime_seconds < 60:
+            return f"{uptime_seconds:.0f}s"
+        elif uptime_seconds < 3600:
+            minutes = uptime_seconds / 60
+            return f"{minutes:.1f}m"
+        elif uptime_seconds < 86400:
+            hours = uptime_seconds / 3600
+            return f"{hours:.1f}h"
+        else:
+            days = uptime_seconds / 86400
+            return f"{days:.1f}d"
+    except:
+        return "Unknown"
+
+
+def getSystemHealth():
+    try:
+        db_health = checkDatabaseHealth()
+        database_status = db_health['status']
+        app_health = 100
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            cpu_percent = psutil.cpu_percent(interval=1)
+            
+            if memory.percent > 90 or cpu_percent > 90:
+                system_health = 25
+            elif memory.percent > 80 or cpu_percent > 80:
+                system_health = 50
+            elif memory.percent > 70 or cpu_percent > 70:
+                system_health = 75
+            else:
+                system_health = 100
+        except:
+            system_health = 50
+            memory = None
+            cpu_percent = None
+        error_logs = getRecentErrorLogs(limit=20, hours=24)
+        tenant_alerts = getRecentTenantAlerts(limit=10)
+        db_metrics = db_health.get('metrics', {})
+        perf_metrics = calculate_performance_metrics()
+        db_perf_metrics = get_database_performance_metrics(hours=24)
+        total_api_requests = int(perf_metrics.get('totalAPIRequests', 0)) + db_perf_metrics.get('database_api_requests', 0)
+        if perf_metrics.get('averageResponseTime', '0ms') != '0ms':
+            avg_response = perf_metrics['averageResponseTime']
+        else:
+            avg_response = db_perf_metrics.get('database_avg_response', '25ms')
+        
+        if perf_metrics.get('apiErrorRate', '0%') != '0%':
+            error_rate = perf_metrics['apiErrorRate']
+        else:
+            error_rate = db_perf_metrics.get('database_error_rate', '0.2%')
+        
+        return {
+            'systemStatus': 1 if system_health > 50 else 0,
+            'databaseStatus': database_status,
+            'appHP': 1,
+            'system_health_percentage': system_health,
+            'database_health_percentage': db_health.get('health_percentage', 0),
+            'app_health_percentage': app_health,
+            'webserverStatus': app_health,
+            'database_details': db_health.get('details', {}),
+            'database_message': db_health.get('message', ''),
+            'databaseQueryLatency': f"{db_metrics.get('query_latency_ms', 'Unknown')}ms",
+            'active_db_connections': db_metrics.get('active_connections', 'Unknown'),
+            'databaseSize': db_metrics.get('database_size', 'Unknown'),
+            'total_db_connections': db_metrics.get('total_connections', 'Unknown'),
+            'idle_db_connections': db_metrics.get('idle_connections', 'Unknown'),
+            'active_queries': db_metrics.get('active_queries', 'Unknown'),
+            'error_logs': error_logs,
+            'tenant_alerts': tenant_alerts,
+            'system_info': {
+                'memory_percent': memory.percent if memory else 'Unknown',
+                'cpu_percent': cpu_percent if cpu_percent else 'Unknown',
+                'available_memory_gb': round(memory.available / (1024**3), 2) if memory else 'Unknown'
+            },
+            'averageResponseTime': avg_response,
+            'apiErrorRate': error_rate,
+            'totalAPIRequests': str(total_api_requests),
+            'uptime': perf_metrics.get('uptime', 'Unknown'),
+            'totalRequests': perf_metrics.get('totalRequests', '0'),
+            'requestsLast24h': str(db_perf_metrics.get('total_events_24h', 0))
+        }
+        
+    except Exception as e:
+        return {
+            'systemStatus': 0,
+            'databaseStatus': 0,
+            'appHP': 1,
+            'system_health_percentage': 0,
+            'database_health_percentage': 0,
+            'app_health_percentage': 50,
+            'webserverStatus': 50,
+            'error': str(e),
+            'database_details': {},
+            'database_message': f'System health check error: {str(e)}',
+            'databaseQueryLatency': 'Error',
+            'active_db_connections': 'Error',
+            'databaseSize': 'Error',
+            'error_logs': [],
+            'tenant_alerts': [],
+            'averageResponseTime': 'Error',
+            'apiErrorRate': 'Error', 
+            'totalAPIRequests': 'Error'
+        }
+
+def get_database_performance_metrics(hours=24):
+    """Get performance metrics from audit logs"""
+    try:
+        from datetime import datetime, timedelta
+        
+        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+        
+        audit_metrics = SysLogService.getSysStats(filters={
+            'start_date': cutoff_time
+        })
+        
+        api_actions = [
+            'FILE_UPLOAD', 'FILE_DOWNLOAD', 'FILE_DELETE', 'FILE_RENAME',
+            'SHARE_LINK_GENERATED', 'DLP_SCAN', 'LOGIN_ATTEMPT'
+        ]
+        
+        try:
+            recent_logs = SysLogService.getSysLogs(
+                limit=1000,
+                filters={'start_date': cutoff_time}
+            )
+            
+            api_requests = 0
+            api_errors = 0
+            response_times = []
+            
+            for log in recent_logs.get('logs', []):
+                action_type = log.get('action_type', '')
+                if any(action in action_type for action in api_actions):
+                    api_requests += 1
+                    
+                    if not log.get('success', True):
+                        api_errors += 1
+                    
+                    if 'UPLOAD' in action_type:
+                        response_times.append(250)
+                    elif 'DOWNLOAD' in action_type:
+                        response_times.append(150)
+                    elif 'DLP_SCAN' in action_type:
+                        response_times.append(500)
+                    else:
+                        response_times.append(50)   
+            
+            avg_response = sum(response_times) / len(response_times) if response_times else 0
+            error_rate = (api_errors / api_requests * 100) if api_requests > 0 else 0
+            
+            return {
+                'database_api_requests': api_requests,
+                'database_api_errors': api_errors,
+                'database_error_rate': f"{error_rate:.1f}%",
+                'database_avg_response': f"{avg_response:.1f}ms",
+                'total_events_24h': audit_metrics.get('total_events', 0)
+            }
+            
+        except Exception as e:
+            print(f"Error analyzing audit logs: {e}")
+            return {}
+            
+    except Exception as e:
+        print(f"Error getting database performance metrics: {e}")
+        return {}
+
+@csrf.exempt
+def checkDatabaseHealth():
+    try:
+        from sqlalchemy import create_engine, text
+        import time
+        db_uri = app.config.get('SQLALCHEMY_DATABASE_URI')
+        if not db_uri:
+            return {
+                'status': 0,
+                'message': 'Database URI not configured',
+                'details': {},
+                'metrics': {}
+            }
+        engine = create_engine(db_uri, pool_timeout=5, pool_recycle=300)
+        start_time = time.time()
+        with engine.connect() as connection:
+            result = connection.execute(text("SELECT 1 as health_check"))
+            health_result = result.fetchone()
+            end_time = time.time()
+            query_latency_ms = round((end_time - start_time) * 1000, 2)
+            
+            if health_result and health_result[0] == 1:
+                db_info = connection.execute(text("""
+                    SELECT 
+                        version() as postgres_version,
+                        current_database() as database_name,
+                        current_user as current_user,
+                        inet_server_addr() as server_ip
+                """)).fetchone()
+                try:
+                    conn_info = connection.execute(text("""
+                        SELECT count(*) as active_connections
+                        FROM pg_stat_activity 
+                        WHERE state = 'active'
+                    """)).fetchone()
+                    active_connections = conn_info[0] if conn_info else 0
+                except:
+                    active_connections = "Permission denied"
+                try:
+                    size_info = connection.execute(text("""
+                        SELECT pg_size_pretty(pg_database_size(current_database())) as db_size
+                    """)).fetchone()
+                    database_size = size_info[0] if size_info else "Unknown"
+                except:
+                    database_size = "Permission denied"
+                try:
+                    perf_info = connection.execute(text("""
+                        SELECT 
+                            (SELECT count(*) FROM pg_stat_activity WHERE state != 'idle') as active_queries,
+                            (SELECT count(*) FROM pg_stat_activity) as total_connections,
+                            (SELECT count(*) FROM pg_stat_activity WHERE state = 'idle') as idle_connections
+                    """)).fetchone()
+                    
+                    active_queries = perf_info[0] if perf_info else 0
+                    total_connections = perf_info[1] if perf_info else 0
+                    idle_connections = perf_info[2] if perf_info else 0
+                except:
+                    active_queries = 0
+                    total_connections = 0
+                    idle_connections = 0
+                if query_latency_ms < 1200:
+                    health_percentage = 100
+                elif query_latency_ms < 1300:
+                    health_percentage = 90
+                elif query_latency_ms < 1400:
+                    health_percentage = 75
+                elif query_latency_ms < 1600:
+                    health_percentage = 50
+                else:
+                    health_percentage = 25
+                
+                return {
+                    'status': 1,
+                    'health_percentage': health_percentage,
+                    'message': 'Database connection successful',
+                    'details': {
+                        'postgres_version': db_info[0] if db_info else "Unknown",
+                        'database_name': db_info[1] if db_info else "Unknown", 
+                        'current_user': db_info[2] if db_info else "Unknown",
+                        'server_ip': db_info[3] if db_info else "Unknown",
+                        'provider': 'Supabase PostgreSQL'
+                    },
+                    'metrics': {
+                        'query_latency_ms': query_latency_ms,
+                        'active_connections': active_connections,
+                        'total_connections': total_connections,
+                        'idle_connections': idle_connections,
+                        'active_queries': active_queries,
+                        'database_size': database_size
+                    }
+                }
+            else:
+                return {
+                    'status': 0,
+                    'health_percentage': 0,
+                    'message': 'Database query failed',
+                    'details': {},
+                    'metrics': {}
+                }
+                
+    except Exception as e:
+        error_message = str(e)
+        if "timeout" in error_message.lower():
+            details = "Connection timeout - check Supabase connection limits"
+        elif "authentication" in error_message.lower():
+            details = "Authentication failed - check credentials"
+        elif "ssl" in error_message.lower():
+            details = "SSL connection issue - Supabase requires SSL"
+        elif "host" in error_message.lower():
+            details = "Host connection issue - check Supabase URL"
+        else:
+            details = f"Database error: {error_message}"
+        
+        return {
+            'status': 0,
+            'health_percentage': 0,
+            'message': 'Database connection failed',
+            'details': {'error': details},
+            'metrics': {}
+        }
+    
+@csrf.exempt
+def checkAppHP():
+    try:
+        db_health = checkDatabaseHealth()
+        database_status = db_health['status']
+        app_health = 100
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            cpu_percent = psutil.cpu_percent(interval=1)
+            if memory.percent > 90 or cpu_percent > 90:
+                system_health = 25
+            elif memory.percent > 80 or cpu_percent > 80:
+                system_health = 50
+            elif memory.percent > 70 or cpu_percent > 70:
+                system_health = 75
+            else:
+                system_health = 100
+        except:
+            system_health = 50 
+            memory = None
+            cpu_percent = None
+        db_metrics = db_health.get('metrics', {})
+        
+        return {
+            'systemStatus': 1 if system_health > 50 else 0,
+            'databaseStatus': database_status,
+            'appHP': 1,
+            
+            'system_health_percentage': system_health,
+            'database_health_percentage': db_health.get('health_percentage', 0),
+            'app_health_percentage': app_health,
+            'webserverStatus': app_health,  
+
+            'database_details': db_health.get('details', {}),
+            'database_message': db_health.get('message', ''),
+            
+            'databaseQueryLatency': f"{db_metrics.get('query_latency_ms', 'Unknown')}ms",
+            'active_db_connections': db_metrics.get('active_connections', 'Unknown'),
+            'databaseSize': db_metrics.get('database_size', 'Unknown'),
+            'total_db_connections': db_metrics.get('total_connections', 'Unknown'),
+            'idle_db_connections': db_metrics.get('idle_connections', 'Unknown'),
+            'active_queries': db_metrics.get('active_queries', 'Unknown'),
+            
+            'system_info': {
+                'memory_percent': memory.percent if memory else 'Unknown',
+                'cpu_percent': cpu_percent if cpu_percent else 'Unknown',
+                'available_memory_gb': round(memory.available / (1024**3), 2) if memory else 'Unknown'
+            },
+            
+            'averageResponseTime': '17ms',  
+            'apiErrorRate': '0.4%',        
+            'totalAPIRequests': '6776'     
+        }
+        
+    except Exception as e:
+        return {
+            'systemStatus': 0,
+            'databaseStatus': 0,
+            'appHP': 1,
+            'system_health_percentage': 0,
+            'database_health_percentage': 0,
+            'app_health_percentage': 50,
+            'webserverStatus': 50,
+            'error': str(e),
+            'database_details': {},
+            'database_message': f'System health check error: {str(e)}',
+            'databaseQueryLatency': 'Error',
+            'active_db_connections': 'Error',
+            'databaseSize': 'Error'
+        }
+
+@csrf.exempt
+def checkSystemHealth():
+    try:
+        webserverStatus = 100
+        systemStatus = 100
+        return {
+            'systemStatus': systemStatus,
+            'webserverStatus': webserverStatus
+        }
+    except Exception as e:
+        print(f"System health check error: {str(e)}")
+        return {
+            'systemStatus': 0,
+            'webserverStatus': 0
+        }
+    
+@csrf.exempt
+def getRecentErrorLogs(limit=10, hours=24):
+    try:
+        from datetime import datetime, timedelta
+        
+        error_logs = []
+        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+        
+        try:
+            system_error_result = SysLogService.getSysLogs(
+                limit=limit//2,
+                offset=0,
+                filters={
+                    'success': False,
+                    'start_date': cutoff_time,
+                    'tenant_id': 'SYSTEM' 
+                }
+            )
+            
+            system_errors = system_error_result.get('logs', [])
+            
+            for error in system_errors:
+                error_logs.append({
+                    'timestamp': error.get('created_at', datetime.utcnow()),
+                    'code': 'SYS_' + str(error.get('id', '000')),
+                    'description': error.get('action_description', 'System error'),
+                    'category': error.get('action_category', 'SYSTEM'),
+                    'severity': 'CRITICAL' if 'CRITICAL' in str(error.get('risk_level', '')) else 'HIGH',
+                    'source': 'System Admin'
+                })
+        except Exception as e:
+            print(f"Error fetching system admin logs: {e}")
+        try:
+            tenant_error_result = SysLogService.getSysLogs(
+                limit=limit//2,
+                offset=0,
+                filters={
+                    'success': False,
+                    'start_date': cutoff_time
+                }
+            )
+            tenant_errors = tenant_error_result.get('logs', [])
+            for error in tenant_errors:
+                if error.get('target_tenant_id') == 'SYSTEM':
+                    continue
+                tenant_id = error.get('target_tenant_id', 'Unknown')
+                error_logs.append({
+                    'timestamp': error.get('created_at', datetime.utcnow()),
+                    'code': f"T{tenant_id}_" + str(error.get('id', '000')),
+                    'description': error.get('action_description', 'Tenant error'),
+                    'category': error.get('action_category', 'TENANT'),
+                    'severity': 'CRITICAL' if 'CRITICAL' in str(error.get('risk_level', '')) else 'HIGH',
+                    'source': f"Tenant {tenant_id}"
+                })
+        except Exception as e:
+            print(f"Error fetching tenant logs: {e}")
+        db_health = checkDatabaseHealth()
+        if db_health['status'] == 0:
+            error_logs.append({
+                'timestamp': datetime.utcnow(),
+                'code': 'DB_001',
+                'description': db_health.get('message', 'Database connection failed'),
+                'category': 'DATABASE',
+                'severity': 'CRITICAL',
+                'source': 'Database Health Check'
+            })
+        try:
+            recent_file_errors = getRecentFileErrors(hours=hours)
+            error_logs.extend(recent_file_errors)
+        except Exception as e:
+            print(f"Error fetching file operation errors: {e}")
+        try:
+            last_scan_time = session.get('last_dlp_scan')
+            if last_scan_time:
+                from datetime import datetime
+                if isinstance(last_scan_time, str):
+                    last_scan = datetime.fromisoformat(last_scan_time)
+                else:
+                    last_scan = last_scan_time
+                    
+                if (datetime.utcnow() - last_scan).total_seconds() > 7200:  # 2 hours
+                    error_logs.append({
+                        'timestamp': datetime.utcnow() - timedelta(hours=1),
+                        'code': 'DLP_001',
+                        'description': 'DLP scanning service may be offline - no recent scans detected',
+                        'category': 'SECURITY',
+                        'severity': 'HIGH',
+                        'source': 'DLP Monitor'
+                    })
+        except Exception as e:
+            print(f"Error checking DLP status: {e}")
+        error_logs.sort(key=lambda x: x.get('timestamp', datetime.min), reverse=True)
+        error_logs = error_logs[:limit]
+        
+        return error_logs
+        
+    except Exception as e:
+        print(f"Error in getRecentErrorLogs: {e}")
+        return [
+            {
+                'timestamp': datetime.utcnow(),
+                'code': 'LOG_ERROR',
+                'description': f'Failed to retrieve error logs: {str(e)}',
+                'category': 'SYSTEM',
+                'severity': 'HIGH',
+                'source': 'Error Log System'
+            }
+        ]
+
+def getRecentFileErrors(hours=24):
+    try:
+        from datetime import datetime, timedelta
+        import os
+        import glob
+        
+        file_errors = []
+        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+        
+        temp_folder = app.config.get('PENDING_FOLDER', 'pending_uploads')
+        if os.path.exists(temp_folder):
+            try:
+                abandoned_files = 0
+                corrupted_files = 0
+                
+                for filename in os.listdir(temp_folder):
+                    file_path = os.path.join(temp_folder, filename)
+                    if os.path.isfile(file_path):
+                        try:
+                            file_created = datetime.fromtimestamp(os.path.getctime(file_path))
+                            file_age = datetime.now() - file_created
+                            
+                            if file_age.total_seconds() > 3600:
+                                abandoned_files += 1
+                            
+                            if os.path.getsize(file_path) == 0:
+                                corrupted_files += 1
+                                
+                        except Exception as e:
+                            print(f"Error checking file {filename}: {e}")
+                
+                if abandoned_files > 0:
+                    file_errors.append({
+                        'timestamp': datetime.utcnow() - timedelta(minutes=30),
+                        'code': 'FILE_001',
+                        'description': f'{abandoned_files} abandoned temporary upload files detected',
+                        'category': 'FILE_MANAGEMENT',
+                        'severity': 'MEDIUM',
+                        'source': 'File Upload System'
+                    })
+                
+                if corrupted_files > 0:
+                    file_errors.append({
+                        'timestamp': datetime.utcnow() - timedelta(minutes=15),
+                        'code': 'FILE_002',
+                        'description': f'{corrupted_files} corrupted/empty files found in temp directory',
+                        'category': 'FILE_MANAGEMENT',
+                        'severity': 'HIGH',
+                        'source': 'File Integrity Check'
+                    })
+                    
+            except Exception as e:
+                file_errors.append({
+                    'timestamp': datetime.utcnow(),
+                    'code': 'FILE_003',
+                    'description': f'Error scanning temp directory: {str(e)}',
+                    'category': 'FILE_MANAGEMENT',
+                    'severity': 'LOW',
+                    'source': 'File System Scanner'
+                })
+        
+        upload_base = app.config.get('UPLOAD_FOLDER', 'uploads')
+        if os.path.exists(upload_base):
+            try:
+                for item in os.listdir(upload_base):
+                    if item.startswith('tenant_'):
+                        tenant_path = os.path.join(upload_base, item)
+                        if os.path.isdir(tenant_path):
+                            try:
+                                test_file = os.path.join(tenant_path, '.write_test')
+                                try:
+                                    with open(test_file, 'w') as f:
+                                        f.write('test')
+                                    os.remove(test_file)
+                                except PermissionError:
+                                    file_errors.append({
+                                        'timestamp': datetime.utcnow(),
+                                        'code': 'FILE_004',
+                                        'description': f'Write permission denied for {item}',
+                                        'category': 'FILE_MANAGEMENT',
+                                        'severity': 'HIGH',
+                                        'source': 'Permission Check'
+                                    })
+                                
+                                try:
+                                    total_size = 0
+                                    file_count = 0
+                                    for root, dirs, files in os.walk(tenant_path):
+                                        for file in files:
+                                            if not file.startswith('.'):
+                                                file_path = os.path.join(root, file)
+                                                if os.path.exists(file_path):
+                                                    total_size += os.path.getsize(file_path)
+                                                    file_count += 1
+                                    
+                                    if total_size > 1024**3:
+                                        file_errors.append({
+                                            'timestamp': datetime.utcnow() - timedelta(minutes=5),
+                                            'code': 'FILE_005',
+                                            'description': f'{item} storage usage high: {total_size/(1024**3):.1f}GB',
+                                            'category': 'FILE_MANAGEMENT',
+                                            'severity': 'MEDIUM',
+                                            'source': 'Storage Monitor'
+                                        })
+                                    
+                                    if file_count > 1000:
+                                        file_errors.append({
+                                            'timestamp': datetime.utcnow() - timedelta(minutes=10),
+                                            'code': 'FILE_006',
+                                            'description': f'{item} has excessive files: {file_count} files',
+                                            'category': 'FILE_MANAGEMENT',
+                                            'severity': 'MEDIUM',
+                                            'source': 'File Count Monitor'
+                                        })
+                                        
+                                except Exception as e:
+                                    print(f"Error calculating size for {item}: {e}")
+                                    
+                            except Exception as e:
+                                print(f"Error checking tenant directory {item}: {e}")
+                                
+            except Exception as e:
+                file_errors.append({
+                    'timestamp': datetime.utcnow(),
+                    'code': 'FILE_007',
+                    'description': f'Error scanning upload directories: {str(e)}',
+                    'category': 'FILE_MANAGEMENT',
+                    'severity': 'MEDIUM',
+                    'source': 'Directory Scanner'
+                })
+        
+        try:
+            failed_file_ops_result = SysLogService.getSysLogs(
+                limit=50,
+                offset=0,
+                filters={
+                    'success': False,
+                    'category': 'FILE_MANAGEMENT',
+                    'start_date': cutoff_time
+                }
+            )
+            
+            failed_file_ops = failed_file_ops_result.get('logs', [])
+            
+            error_groups = {}
+            for op in failed_file_ops:
+                action_type = op.get('action_type', 'UNKNOWN_FILE_ERROR')
+                if action_type not in error_groups:
+                    error_groups[action_type] = {
+                        'count': 0,
+                        'latest': op.get('created_at', datetime.utcnow()),
+                        'description': op.get('action_description', 'File operation failed')
+                    }
+                error_groups[action_type]['count'] += 1
+            
+            for action_type, data in error_groups.items():
+                if data['count'] > 1: 
+                    file_errors.append({
+                        'timestamp': data['latest'],
+                        'code': 'AUDIT_' + action_type.replace('_', '')[:6],
+                        'description': f"{data['count']} {action_type.lower().replace('_', ' ')} failures in last {hours}h",
+                        'category': 'FILE_MANAGEMENT',
+                        'severity': 'HIGH' if data['count'] > 10 else 'MEDIUM',
+                        'source': 'Audit Log Analysis'
+                    })
+                    
+        except Exception as e:
+            print(f"Error checking audit logs for file errors: {e}")
+        
+        try:
+            metadata_file = FILE_METADATA_JSON  
+            if os.path.exists(metadata_file):
+                try:
+                    import json
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    orphaned_count = 0
+                    for tenant_key, files in metadata.items():
+                        if tenant_key.startswith('tenant_'):
+                            tenant_id = tenant_key.split('_')[1]
+                            tenant_folder = get_tenant_upload_folder(tenant_id)
+                            
+                            for filename in files.keys():
+                                file_path = os.path.join(tenant_folder, filename)
+                                if not os.path.exists(file_path):
+                                    orphaned_count += 1
+                    
+                    if orphaned_count > 0:
+                        file_errors.append({
+                            'timestamp': datetime.utcnow() - timedelta(minutes=20),
+                            'code': 'META_001',
+                            'description': f'{orphaned_count} orphaned metadata entries found',
+                            'category': 'FILE_MANAGEMENT',
+                            'severity': 'MEDIUM',
+                            'source': 'Metadata Integrity Check'
+                        })
+                        
+                except Exception as e:
+                    file_errors.append({
+                        'timestamp': datetime.utcnow(),
+                        'code': 'META_002',
+                        'description': f'Error reading metadata file: {str(e)}',
+                        'category': 'FILE_MANAGEMENT',
+                        'severity': 'MEDIUM',
+                        'source': 'Metadata System'
+                    })
+        except Exception as e:
+            print(f"Error checking metadata: {e}")
+        
+        return file_errors
+        
+    except Exception as e:
+        return [{
+            'timestamp': datetime.utcnow(),
+            'code': 'FILE_SYSTEM_ERROR',
+            'description': f'File error monitoring system failed: {str(e)}',
+            'category': 'FILE_MANAGEMENT',
+            'severity': 'HIGH',
+            'source': 'File Error Monitor'
+        }]
+
+def getRecentTenantAlerts(limit=10):
+
+    "coconut"
+
+
+
+
+
+    try:
+        from datetime import datetime, timedelta
+        
+        tenant_alerts = []
+
+        try:
+            tenants_result = db.session.execute(text("SELECT id, company_name FROM tenants WHERE is_active = true")).fetchall()
+            
+            for tenant in tenants_result:
+                tenant_id = tenant[0]
+                company_name = tenant[1]
+                
+                try:
+                    stats = get_tenant_stats(tenant_id)
+                    
+                    total_events = stats.get('total_events', 0)
+                    failed_events = stats.get('failed_events', 0)
+                    
+                    if total_events > 0:
+                        error_rate = (failed_events / total_events) * 100
+                        if error_rate > 10:
+                            tenant_alerts.append({
+                                'tenant_id': tenant_id,
+                                'company_name': company_name,
+                                'status': 'Warning',
+                                'cpu': f"{min(error_rate * 2, 100):.1f}",  
+                                'storage': f"{min(total_events / 10, 100):.1f}",  
+                                'errors': f"{error_rate:.1f}",
+                                'description': f'High error rate detected: {error_rate:.1f}% failure rate',
+                                'timestamp': datetime.utcnow()
+                            })
+                        
+                        if total_events > 100:  
+                            tenant_alerts.append({
+                                'tenant_id': tenant_id,
+                                'company_name': company_name,
+                                'status': 'Warning',
+                                'cpu': '93',
+                                'storage': '45',
+                                'errors': '5.4',
+                                'description': 'Bulk download pattern detected',
+                                'timestamp': datetime.utcnow() - timedelta(minutes=15)
+                            })
+                
+                except Exception as e:
+                    print(f"Error checking tenant {tenant_id}: {e}")
+                    
+        except Exception as e:
+            print(f"Error fetching tenant alerts: {e}")
+        
+    
+        tenant_alerts.sort(key=lambda x: x['timestamp'], reverse=True)
+        return tenant_alerts[:limit]
+        
+    except Exception as e:
+        print(f"Error in getRecentTenantAlerts: {e}")
+        return [
+            {
+                'tenant_id': 'ERR',
+                'company_name': 'System Error',
+                'status': 'Error',
+                'cpu': '0',
+                'storage': '0', 
+                'errors': '100',
+                'description': f'Failed to load tenant alerts: {str(e)}',
+                'timestamp': datetime.utcnow()
+            }
+        ]
+
+@csrf.exempt
+@app.route('/debug/syshpstatus')
+def debug_status():
+    """Enhanced debug endpoint with comprehensive system status"""
+    try:
+        health_metrics = getSystemHealth()
+        
+        debug_info = {
+            'timestamp': datetime.now().isoformat(),
+            'flask_status': 'Running',
+            'dlp_scanner': 'Active' if dlpScanner else 'Inactive',
+            'file_processor': 'Active' if fileProcessor else 'Inactive',
+            'database_connection': 'Connected' if health_metrics.get('database_status', 0) > 0 else 'Failed',
+            'system_health': health_metrics
+        }
+        
+        return jsonify(debug_info)
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'timestamp': datetime.now().isoformat(),
+            'status': 'Error'
+        }), 500
+
+@csrf.exempt
+@app.route('/system-admin/audit-logs')
+def system_admin_audit_dashboard():
+    try:
+        category = request.args.get('category')
+        admin_email = request.args.get('admin_email')
+        start_date = request.args.get('start_date')
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        filters = {'tenant_id': 'SYSTEM'}  
+        if category:
+            filters['category'] = category
+        if admin_email:
+            filters['admin_email'] = admin_email
+        if start_date:
+            filters['start_date'] = datetime.fromisoformat(start_date)
+        offset = (page - 1) * per_page
+        result = SysLogService.getSysLogs(
+            limit=per_page, 
+            offset=offset, 
+            filters=filters
+        )
+        stats = SysLogService.getSysStats(filters)
+        SysLogService.logTheEvent(
+            action_type='SYSTEM_ADMIN_LOGIN',
+            description="System admin accessed audit logs dashboard"
+        )
+        return render_template('SuperAdmin/auditlogs.html',
+                             logs=result['logs'],
+                             total_count=result['total_count'],
+                             has_more=result['has_more'],
+                             current_page=page,
+                             per_page=per_page,
+                             stats=stats,
+                             categories=SysLogService.CATEGORIES,
+                             action_types=SysLogService.ACTION_TYPES)
+    except Exception as e:
+        SysLogService.logTheEvent(
+            action_type='SYSTEM_ADMIN_ACCESS_DENIED',
+            description=f"Failed to access system admin dashboard: {str(e)}",
+            success=False
+        )
+        flash(f"Error loading system audit logs: {str(e)}", "error")
+        return render_template('SuperAdmin/auditlogs.html', logs=[], total_count=0)
+
+@app.route('/tenant/<int:tenant_id>/audit-logs')
+def tenant_audit_logs(tenant_id):
+    try:
+        if session.get('tenant_id') != tenant_id:
+            flash("Access denied to this tenant's audit logs.", "danger")
+            return redirect(url_for('login'))
+        category = request.args.get('category')
+        admin_email = request.args.get('admin_email')
+        start_date = request.args.get('start_date')
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        filters = {
+            'tenant_id': str(tenant_id) 
+        }
+        if category:
+            filters['category'] = category
+        if admin_email:
+            filters['admin_email'] = admin_email
+        if start_date:
+            filters['start_date'] = datetime.fromisoformat(start_date)
+        offset = (page - 1) * per_page
+        result = SysLogService.getSysLogs(
+            limit=per_page, 
+            offset=offset, 
+            filters=filters
+        )
+        stats = SysLogService.getSysStats(filters)
+        tenant = db.session.execute(
+            text("SELECT company_name FROM tenants WHERE id = :id"),
+            {"id": tenant_id}
+        ).first()
+        tenant_name = tenant.company_name if tenant else None
+        SysLogService.logTenantEvent(
+            tenant_id=tenant_id,
+            action_type='TENANT_ACCESS',
+            description="Tenant admin accessed audit logs dashboard"
+        )
+        return render_template('CompanyAdmin/tenant_auditlogs.html',
+                             logs=result['logs'],
+                             total_count=result['total_count'],
+                             has_more=result['has_more'],
+                             current_page=page,
+                             per_page=per_page,
+                             stats=stats,
+                             categories=SysLogService.CATEGORIES,
+                             action_types=SysLogService.ACTION_TYPES,
+                             tenant_id=str(tenant_id),
+                             tenant_name=tenant_name)
+    except Exception as e:
+        SysLogService.logTenantEvent(
+            tenant_id=tenant_id,
+            action_type='TENANT_ACCESS',
+            description=f"Failed to access tenant audit logs: {str(e)}",
+            success=False
+        )
+        flash(f"Error loading tenant audit logs: {str(e)}", "error")
+        return render_template('CompanyAdmin/tenant_auditlogs.html', 
+                             logs=[], 
+                             total_count=0,
+                             tenant_id=str(tenant_id))
+
+def log_system_admin_event(action_type, description, category='GENERAL', **kwargs):
+    """Log system admin events explicitly"""
+    try:
+        ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
+        user_email = session.get('email') or session.get('temp_user_email') or 'SYSTEM'
+        
+        SysLogService.logSystemAdminEvent(
+            action_type=action_type,
+            description=description,
+            admin_email=user_email,
+            category=category,
+            ip_address=ip_address,
+            **kwargs
+        )
+    except Exception as e:
+        current_app.logger.error(f"System admin audit logging error: {e}")
+
+def log_tenant_event(action_type, description, category='GENERAL', tenant_id=None, **kwargs):
+    """Log tenant-specific events explicitly"""
+    try:
+        ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
+        user_email = session.get('email') or session.get('temp_user_email')
+        tenant_id = tenant_id or session.get('tenant_id')
+        
+        if not tenant_id:
+            raise ValueError("No tenant_id provided for tenant event")
+            
+        SysLogService.logTenantEvent(
+            tenant_id=tenant_id,
+            action_type=action_type,
+            description=description,
+            admin_email=user_email,
+            category=category,
+            ip_address=ip_address,
+            **kwargs
+        )
+    except Exception as e:
+        current_app.logger.error(f"Tenant audit logging error: {e}")
+
+def log_audit_event(action_type, description, category='GENERAL', force_system=False, force_tenant=False, **kwargs):
+    try:
+        if force_system:
+            return log_system_admin_event(action_type, description, category, **kwargs)
+        
+        if force_tenant:
+            return log_tenant_event(action_type, description, category, **kwargs)
+        
+        user_type = session.get('user_type')
+        tenant_id = session.get('tenant_id')
+        
+        current_route = request.endpoint or ''
+        
+        if (user_type == 'system_admin' or 
+            current_route.startswith('system_') or 
+            'SuperAdmin' in current_route or
+            (not tenant_id and user_type != 'user')):
+            
+            return log_system_admin_event(action_type, description, category, **kwargs)
+        
+        elif tenant_id and (user_type in ['tenant_admin', 'user']):
+            return log_tenant_event(action_type, description, category, tenant_id=tenant_id, **kwargs)
+        
+        else:
+            return log_system_admin_event(action_type, f"[AUTO_DETECT] {description}", category, **kwargs)
+            
+    except Exception as e:
+        current_app.logger.error(f"Audit logging error: {e}")
 
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
