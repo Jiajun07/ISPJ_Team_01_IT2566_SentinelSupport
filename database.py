@@ -1791,3 +1791,33 @@ def log_sharing_activity(tenant_id, document_id, filename, action, shared_by_ema
         except:
             pass
         return False
+
+
+class SuperAdmin(db.Model):
+    __tablename__ = 'superadmins'
+    __table_args__ = {'schema': 'public'}
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        server_default=db.func.now()
+    )
+
+
+def authenticate_superadmin(email: str, password: str):
+    result = db.session.execute(
+        text("""
+            SELECT id, password_hash
+            FROM public.superadmins
+            WHERE email = :email AND is_active = TRUE
+        """),
+        {"email": email}
+    ).fetchone()
+
+    if result and bcrypt.checkpw(password.encode(), result.password_hash.encode()):
+        return {"id": result.id}
+
+    return None

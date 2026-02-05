@@ -30,7 +30,7 @@ from database import (db, MasterSessionLocal, list_backups, restore_backup, get_
                       store_file_in_db, add_file_version, get_file_from_db, get_all_files_for_tenant, 
                       get_file_versions_from_db, delete_file_from_db, restore_file_from_db, update_file_metadata,
                       create_share_link, get_share_link_by_token, update_share_link_access,
-                      create_key_exchange, get_key_exchange, update_key_exchange, log_sharing_activity)
+                      create_key_exchange, get_key_exchange, update_key_exchange, log_sharing_activity, authenticate_superadmin)
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import (Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm,
@@ -2996,6 +2996,24 @@ def login():
         password_input = escape(form.password.data)
 
         print(f"🔍 Login attempt: {email_input}")
+
+            # ✅ PATH 0: SUPERADMIN (public.superadmins)
+        superadmin = authenticate_superadmin(email_input, password_input)
+        if superadmin:
+            session.clear()
+            session['user_type'] = 'superadmin'
+            session['superadmin_id'] = superadmin['id']
+            session['email'] = email_input
+            session.permanent = True
+
+            log_tenant_event(
+                action_type='SUPERADMIN_LOGIN_SUCCESS',
+                description=f"Superadmin login: {email_input}",
+                category='SYSTEM_ACTIVITY'
+            )
+
+            flash("🛡️ Superadmin access granted", "success")
+            return redirect(url_for('system_admin_audit_dashboard'))
 
         # ✅ PATH 1: TENANT ADMIN (public.tenants table)
         tenant_admin = authenticate_tenant_admin(email_input, password_input)
