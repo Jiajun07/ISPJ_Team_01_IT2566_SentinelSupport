@@ -5,13 +5,17 @@ import hashlib
 import base64
 import secrets
 from dotenv import load_dotenv
-from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash, flash, current_app
+from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash, flash, current_app, send_file
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
 from database import (db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin,
                       TenantSecurity, apply_rls_policies, authenticate_user, find_user_by_email, get_verification_code,
-                      mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code, retention_cleanup)
+                      mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code, retention_cleanup,
+                      store_file_in_db, add_file_version, get_file_from_db, get_all_files_for_tenant, 
+                      get_file_versions_from_db, delete_file_from_db, restore_file_from_db, update_file_metadata,
+                      create_share_link, get_share_link_by_token, update_share_link_access,
+                      create_key_exchange, get_key_exchange, update_key_exchange, log_sharing_activity)
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm, SecurityBaselineForm
@@ -48,9 +52,207 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Initialize DB
 db.init_app(app)
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+def ensure_tenant_tables_exist():
+    """
+    Automatically create missing tables for all existing tenant schemas.
+    Called at app startup to prevent 'table does not exist' errors.
+    """
+    try:
+        # Get all existing tenants (including inactive ones to ensure schema integrity)
+        tenants = Tenant.query.all()
+        
+        for tenant in tenants:
+            schema_name = f"tenant_{tenant.id}"
+            
+            try:
+                # Check if schema exists
+                result = db.session.execute(text(f"""
+                    SELECT schema_name FROM information_schema.schemata 
+                    WHERE schema_name = '{schema_name}'
+                """))
+                
+                if not result.fetchone():
+                    print(f"⚠️  Schema {schema_name} does not exist. Skipping.")
+                    continue
+                
+                print(f"🔄 Ensuring tables exist for {schema_name}...")
+                
+                # Create all required tables (IF NOT EXISTS prevents duplicates)
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".users (
+                        id SERIAL PRIMARY KEY,
+                        email VARCHAR(255) UNIQUE NOT NULL,
+                        password_hash VARCHAR(255) NOT NULL,
+                        role VARCHAR(50) NOT NULL DEFAULT 'user',
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                '''))
+                
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".documents (
+                        id SERIAL PRIMARY KEY,
+                        owner_user_id INT REFERENCES "{schema_name}".users(id),
+                        file_path TEXT NOT NULL,
+                        classification VARCHAR(50) NOT NULL,
+                        version INT DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                '''))
+                
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".audit_logs (
+                        id SERIAL PRIMARY KEY,
+                        user_id INT REFERENCES "{schema_name}".users(id),
+                        action VARCHAR(100) NOT NULL,
+                        target_type VARCHAR(50),
+                        target_id INT,
+                        details TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                '''))
+                
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".files (
+                        id SERIAL PRIMARY KEY,
+                        document_id VARCHAR(50) NOT NULL,
+                        file_name VARCHAR(255) NOT NULL,
+                        owner_user_id INT NOT NULL,
+                        owner_email VARCHAR(255) NOT NULL,
+                        file_data BYTEA NOT NULL,
+                        file_size BIGINT NOT NULL,
+                        file_hash VARCHAR(64) NOT NULL,
+                        mime_type VARCHAR(100),
+                        sensitivity VARCHAR(50) DEFAULT 'Public',
+                        classification VARCHAR(50),
+                        risk_level VARCHAR(50),
+                        notes TEXT,
+                        is_current_version BOOLEAN DEFAULT TRUE,
+                        is_deleted BOOLEAN DEFAULT FALSE,
+                        deleted_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                '''))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_files_document_id ON "{schema_name}".files(document_id)'))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_files_owner ON "{schema_name}".files(owner_user_id)'))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_files_current ON "{schema_name}".files(is_current_version)'))
+                
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".file_versions (
+                        id SERIAL PRIMARY KEY,
+                        document_id VARCHAR(50) NOT NULL,
+                        version_number INT NOT NULL,
+                        file_name VARCHAR(255) NOT NULL,
+                        file_data BYTEA NOT NULL,
+                        file_size BIGINT NOT NULL,
+                        file_hash VARCHAR(64) NOT NULL,
+                        mime_type VARCHAR(100),
+                        uploaded_by VARCHAR(255) NOT NULL,
+                        uploaded_at TIMESTAMP DEFAULT NOW(),
+                        is_current BOOLEAN DEFAULT FALSE,
+                        UNIQUE(document_id, version_number)
+                    )
+                '''))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_versions_document ON "{schema_name}".file_versions(document_id)'))
+                
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".file_sharing_links (
+                        id SERIAL PRIMARY KEY,
+                        document_id VARCHAR(50) NOT NULL,
+                        file_name VARCHAR(255) NOT NULL,
+                        share_token VARCHAR(255) UNIQUE NOT NULL,
+                        password_hash VARCHAR(255),
+                        require_key_exchange BOOLEAN DEFAULT FALSE,
+                        exchange_id VARCHAR(255),
+                        created_by VARCHAR(255) NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        expires_at TIMESTAMP,
+                        last_accessed TIMESTAMP,
+                        access_count INT DEFAULT 0
+                    )
+                '''))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_token ON "{schema_name}".file_sharing_links(share_token)'))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_document ON "{schema_name}".file_sharing_links(document_id)'))
+                
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".sharing (
+                        id SERIAL PRIMARY KEY,
+                        document_id VARCHAR(50) NOT NULL,
+                        file_name VARCHAR(255) NOT NULL,
+                        shared_with_email VARCHAR(255) NOT NULL,
+                        shared_by_email VARCHAR(255) NOT NULL,
+                        access_level VARCHAR(50) DEFAULT 'view',
+                        is_accepted BOOLEAN DEFAULT FALSE,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        shared_at TIMESTAMP DEFAULT NOW(),
+                        expires_at TIMESTAMP,
+                        last_accessed TIMESTAMP,
+                        access_count INT DEFAULT 0,
+                        UNIQUE(document_id, shared_with_email)
+                    )
+                '''))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_sharing_document ON "{schema_name}".sharing(document_id)'))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_sharing_recipient ON "{schema_name}".sharing(shared_with_email)'))
+                
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".sharing_activity (
+                        id SERIAL PRIMARY KEY,
+                        document_id VARCHAR(50) NOT NULL,
+                        file_name VARCHAR(255) NOT NULL,
+                        action VARCHAR(50) NOT NULL,
+                        shared_with_email VARCHAR(255),
+                        shared_via_link VARCHAR(255),
+                        shared_by_email VARCHAR(255) NOT NULL,
+                        ip_address VARCHAR(50),
+                        user_agent VARCHAR(255),
+                        activity_at TIMESTAMP DEFAULT NOW(),
+                        details JSONB
+                    )
+                '''))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_activity_document ON "{schema_name}".sharing_activity(document_id)'))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_activity_action ON "{schema_name}".sharing_activity(action)'))
+                
+                db.session.execute(text(f'''
+                    CREATE TABLE IF NOT EXISTS "{schema_name}".key_exchanges (
+                        id SERIAL PRIMARY KEY,
+                        exchange_id VARCHAR(255) UNIQUE NOT NULL,
+                        sharer_email VARCHAR(255) NOT NULL,
+                        recipient_email VARCHAR(255) NOT NULL,
+                        document_id VARCHAR(50) NOT NULL,
+                        file_name VARCHAR(255) NOT NULL,
+                        sharer_public_key TEXT,
+                        recipient_public_key TEXT,
+                        sharer_fingerprint VARCHAR(64),
+                        recipient_fingerprint VARCHAR(64),
+                        status VARCHAR(50) DEFAULT 'pending',
+                        sharer_verified BOOLEAN DEFAULT FALSE,
+                        recipient_verified BOOLEAN DEFAULT FALSE,
+                        recipient_confirmed BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        expires_at TIMESTAMP,
+                        verified_at TIMESTAMP
+                    )
+                '''))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_exchange_id ON "{schema_name}".key_exchanges(exchange_id)'))
+                db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_exchange_status ON "{schema_name}".key_exchanges(status)'))
+                
+                db.session.commit()
+                print(f"✅ Tables verified/created for {schema_name}")
+                
+            except Exception as e:
+                print(f"❌ Error ensuring tables for {schema_name}: {e}")
+                db.session.rollback()
+                
+    except Exception as e:
+        print(f"❌ Error in ensure_tenant_tables_exist: {e}")
+        db.session.rollback()
+
 # Create public.tenants table (run once)
 with app.app_context():
      db.create_all()  # creates Tenant model table
+     ensure_tenant_tables_exist()  # ensure all tenant schemas have required tables
 
 load_dotenv()
 
@@ -70,16 +272,27 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 csrf = CSRFProtect(app)
 
-# Dummy tenant accounts
-DUMMY_ACCOUNTS = {
-    '1': {'name': 'Acme Corp', 'owner': 'John Doe'},
-    '2': {'name': 'Tech Solutions', 'owner': 'Jane Smith'}
-}
+
+# Global error handler for database transaction errors
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Handle uncaught exceptions and rollback database transactions"""
+    # Rollback any pending database transactions
+    db.session.rollback()
+    
+    # Log the error
+    print(f"❌ Unhandled exception: {type(e).__name__}: {e}")
+    
+    # Re-raise the exception so Flask can handle it normally
+    raise
 
 
 def get_current_tenant():
-    """Get current tenant ID from URL parameter or form data, default to tenant 1"""
-    return request.args.get('tenant') or request.form.get('tenant', '1')
+    """Get current tenant ID from session, fallback to request only if needed"""
+    tenant_id = session.get('tenant_id')
+    if tenant_id:
+        return str(tenant_id)
+    return request.args.get('tenant') or request.form.get('tenant')
 
 def get_tenant_upload_folder(tenant_id):
     """Get upload folder for specific tenant"""
@@ -247,6 +460,28 @@ def detect_file_extension(filepath):
         return '.bin'
 
 
+def detect_file_extension_from_data(file_data):
+    """Detect file type from magic bytes in binary data and return appropriate extension."""
+    try:
+        magic_bytes = file_data[:12] if len(file_data) >= 12 else file_data
+        
+        # Check magic bytes for common file types
+        if magic_bytes.startswith(b'\xFF\xD8\xFF'):  # JPEG
+            return '.jpg'
+        elif magic_bytes.startswith(b'\x89PNG'):  # PNG
+            return '.png'
+        elif magic_bytes.startswith(b'%PDF'):  # PDF
+            return '.pdf'
+        elif magic_bytes.startswith(b'PK\x03\x04'):  # ZIP (DOCX, XLSX, etc)
+            return '.docx'
+        elif magic_bytes.startswith(b'\xD0\xCF\x11\xE0'):  # OLE (DOC, XLS)
+            return '.doc'
+        else:
+            return '.bin'  # Unknown binary
+    except:
+        return '.bin'
+
+
 def get_file_extension(filename):
     """Get file extension, preferring actual file content detection."""
     _, ext = os.path.splitext(filename)
@@ -254,81 +489,107 @@ def get_file_extension(filename):
 
 
 def get_uploaded_files():
+    """Get all files from database for current tenant"""
     tenant_id = get_current_tenant()
-    tenant_folder = get_tenant_upload_folder(tenant_id)
-    account_info = DUMMY_ACCOUNTS.get(tenant_id, {'owner': 'Unknown'})
+    user_email = session.get('email', 'Unknown')
+    
+    # Get all files from database
+    db_files = get_all_files_for_tenant(tenant_id, owner_email=user_email, include_deleted=False)
     
     files = []
-    if os.path.exists(tenant_folder):
-        for fname in sorted(os.listdir(tenant_folder)):
-            fpath = os.path.join(tenant_folder, fname)
-            if os.path.isfile(fpath):
-                metadata = get_file_metadata(fname, tenant_id)
-                files.append(
-                    {
-                        "name": fname,
-                        "size": os.path.getsize(fpath),
-                        "url": url_for("download_file", filename=fname, tenant=tenant_id),
-                        "hash": compute_sha256(fpath),
-                        "owner": account_info['owner'],
-                        "modified": datetime.fromtimestamp(os.path.getmtime(fpath)).strftime('%d %B %Y'),
-                        "sensitivity": metadata.get("sensitivity") or "Unclassified"
-                    }
-                )
+    for db_file in db_files:
+        files.append({
+            "name": db_file['file_name'],
+            "size": db_file['file_size'],
+            "url": url_for("download_file", filename=db_file['file_name'], tenant=tenant_id),
+            "hash": db_file['file_hash'],
+            "owner": db_file['owner_email'],
+            "modified": db_file['updated_at'].strftime('%d %B %Y') if db_file.get('updated_at') else 'N/A',
+            "sensitivity": db_file.get('sensitivity') or 'Public',
+            "document_id": db_file['document_id']
+        })
+    
     return files
 
 
 @app.route('/myfiles', methods=['GET'])
 def myfiles():
     tenant_id = get_current_tenant()
-    account_info = DUMMY_ACCOUNTS.get(tenant_id, {'name': 'Unknown'})
+    user_email = session.get('email', 'Unknown')
     files = get_uploaded_files()
-    return render_template("users/myfiles.html", files=files, tenant_id=tenant_id, account_name=account_info['name'])
+    return render_template("users/myfiles.html", files=files, tenant_id=tenant_id, account_name=user_email)
 
 
 @app.route('/shared-with-me', methods=['GET'])
 def shared_with_me():
+    """View files shared with current tenant - uses database"""
     tenant_id = get_current_tenant()
-    account_info = DUMMY_ACCOUNTS.get(tenant_id, {'name': 'Unknown', 'owner': 'You'})
+    user_email = session.get('email', 'Unknown')
     
-    # Load received shares for this tenant
-    received_shares = load_received_shares()
-    tenant_key = f'tenant_{tenant_id}'
-    tenant_shares = received_shares.get(tenant_key, [])
-
-    # Prune entries that no longer exist on disk and hide unverified exchanges
-    key_exchanges = load_key_exchanges()
-    pruned_shares = []
-    changed = False
-    for entry in tenant_shares:
-        filename = entry.get('name')
-        owner_tenant_id = str(entry.get('owner_tenant_id') or '')
-        if not filename or not owner_tenant_id:
-            changed = True
-            continue
-        owner_folder = get_tenant_upload_folder(owner_tenant_id)
-        file_path = os.path.join(owner_folder, filename)
-        version_path = os.path.join(app.config['VERSIONS_FOLDER'], filename)
-        if not (os.path.exists(file_path) or os.path.exists(version_path)):
-            changed = True
-            continue
-
-        if entry.get('require_key_exchange') and entry.get('exchange_id'):
-            exchange = key_exchanges.get(entry.get('exchange_id'))
-            status = exchange.get('status') if exchange else 'pending'
-            entry['verification_status'] = status
-            if status != 'verified':
-                changed = True
-                continue
-
-        pruned_shares.append(entry)
-
-    if changed:
-        received_shares[tenant_key] = pruned_shares
-        save_received_shares(received_shares)
-        tenant_shares = pruned_shares
+    # Query sharing_activity table for files shared with this tenant
+    # We'll get unique file shares for this tenant
+    from sqlalchemy import text
     
-    return render_template("users/shared_with_me.html", files=tenant_shares, tenant_id=tenant_id, account_name=account_info['name'])
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(text(f'SET search_path TO tenant_{tenant_id}'))
+            
+            # Get all active share links where files have been accessed
+            query = text("""
+                SELECT DISTINCT ON (fsl.document_id)
+                    f.document_id,
+                    f.file_name,
+                    f.file_size,
+                    f.updated_at,
+                    fsl.share_token,
+                    fsl.created_by as owner,
+                    fsl.require_key_exchange,
+                    fsl.exchange_id,
+                    fsl.created_at as date_shared
+                FROM file_sharing_links fsl
+                JOIN files f ON fsl.document_id = f.document_id
+                WHERE f.is_deleted = FALSE
+                ORDER BY fsl.document_id, fsl.created_at DESC
+            """)
+            
+            result = conn.execute(query)
+            rows = result.fetchall()
+            
+            tenant_shares = []
+            for row in rows:
+                verification_status = 'not_required'
+                if row[6]:  # require_key_exchange
+                    if row[7]:  # exchange_id
+                        exchange = get_key_exchange(tenant_id, row[7])
+                        if exchange:
+                            verification_status = exchange.get('status', 'pending')
+                            # Only show verified exchanges
+                            if verification_status != 'verified':
+                                continue
+                        else:
+                            continue
+                
+                tenant_shares.append({
+                    'document_id': row[0],
+                    'name': row[1],
+                    'size': row[2],
+                    'modified': row[3].strftime('%Y-%m-%d %H:%M:%S') if row[3] else 'N/A',
+                    'owner': row[5],
+                    'sensitivity': 'Shared',
+                    'url': f"/download/shared/{row[1]}?share={row[4]}&tenant={tenant_id}",
+                    'share_token': row[4],
+                    'owner_tenant_id': tenant_id,
+                    'require_key_exchange': row[6],
+                    'exchange_id': row[7],
+                    'verification_status': verification_status,
+                    'date_shared': row[8].strftime('%Y-%m-%d') if row[8] else 'N/A'
+                })
+            
+            return render_template("users/shared_with_me.html", files=tenant_shares, tenant_id=tenant_id, account_name=user_email)
+    
+    except Exception as e:
+        print(f"❌ Error loading shared files: {e}")
+        return render_template("users/shared_with_me.html", files=[], tenant_id=tenant_id, account_name=user_email)
 
 
 # Share link storage (in production, use database)
@@ -717,15 +978,16 @@ Password Protected: {'Yes' if has_password else 'No'}
 @csrf.exempt
 @app.route('/generate_share_link', methods=['POST'])
 def generate_share_link():
-    """Generate a secure share link for a file"""
+    """Generate a secure share link for a file - stores in database"""
     try:
         data = request.json
         filename = data.get('filename')
-        tenant_id = data.get('tenant', get_current_tenant())
+        tenant_id = get_current_tenant()
         password = data.get('password')
         require_key_exchange = bool(data.get('require_key_exchange'))
         exchange_id = data.get('exchange_id')
         recipient_email = data.get('recipient_email')
+        owner = session.get('email', 'Unknown')
         
         if not filename:
             return jsonify({'error': 'Filename required'}), 400
@@ -733,36 +995,52 @@ def generate_share_link():
         if require_key_exchange and not exchange_id:
             return jsonify({'error': 'Key exchange required but exchange ID missing'}), 400
         
-        # Generate a secure random token
-        share_token = secrets.token_urlsafe(32)
+        # Get file from database
+        file_record = get_file_from_db(tenant_id, filename=filename)
+        if not file_record:
+            return jsonify({'error': 'File not found'}), 404
         
-        # Load existing share links
-        share_links = load_share_links()
+        document_id = file_record['document_id']
         
-        # Get owner info
-        owner = DUMMY_ACCOUNTS.get(tenant_id, {}).get('owner', 'Unknown')
+        # Hash password if provided
+        password_hash = None
+        if password:
+            from werkzeug.security import generate_password_hash
+            password_hash = generate_password_hash(password)
         
-        # Store the share link with file info
-        share_links[share_token] = {
-            'filename': filename,
-            'tenant_id': tenant_id,
-            'created_at': datetime.now().isoformat(),
-            'owner': owner,
-            'password': generate_password_hash(password) if password else None,
-            'require_key_exchange': require_key_exchange,
-            'exchange_id': exchange_id,
-            'recipient_email': recipient_email
-        }
+        # Create share link in database
+        result = create_share_link(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            filename=filename,
+            created_by=owner,
+            password_hash=password_hash,
+            require_key_exchange=require_key_exchange,
+            exchange_id=exchange_id,
+            expires_at=None  # Could add expiration from request
+        )
         
-        # Save to file
-        save_share_links(share_links)
+        if not result.get('success'):
+            return jsonify({'error': 'Failed to create share link'}), 500
+        
+        share_token = result['share_token']
         
         # Generate the full share URL
         base_url = request.host_url.rstrip('/')
         share_url = f"{base_url}/shared-with-me?share={share_token}&tenant={tenant_id}"
         
-        # Log the share link generation to text file
-        log_share_link(share_token, filename, owner, tenant_id, base_url, has_password=bool(password))
+        # Log sharing activity
+        log_sharing_activity(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            filename=filename,
+            action='link_created',
+            shared_by_email=owner,
+            shared_via_link=share_token,
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get('User-Agent'),
+            details={'password_protected': bool(password), 'key_exchange': require_key_exchange}
+        )
         
         return jsonify({
             'success': True,
@@ -771,30 +1049,65 @@ def generate_share_link():
         })
         
     except Exception as e:
+        print(f"❌ Error generating share link: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @csrf.exempt
 @app.route('/initiate_key_exchange', methods=['POST'])
 def initiate_key_exchange():
-    """Initiate a key exchange for secure file sharing"""
+    """Initiate a key exchange for secure file sharing - stores in database"""
     try:
         data = request.json
         filename = data.get('filename')
         recipient_email = data.get('recipient_email')
-        tenant_id = data.get('tenant', get_current_tenant())
-        sharer_id = "You"
+        tenant_id = get_current_tenant()
+        sharer_email = session.get('email', 'Unknown')
 
         if not filename or not recipient_email:
             return jsonify({'error': 'Missing filename or recipient email'}), 400
 
-        recipient_tenant = 'pending'
-
-        exchange_id, sharer_public_key = create_key_exchange(
-            sharer_id, tenant_id, recipient_email, filename, recipient_tenant
+        # Get file from database
+        file_record = get_file_from_db(tenant_id, filename=filename)
+        if not file_record:
+            return jsonify({'error': 'File not found'}), 404
+        
+        document_id = file_record['document_id']
+        
+        # Generate or get user's public key
+        sharer_public_key = get_or_create_user_key(sharer_email, tenant_id)
+        
+        # Generate unique exchange ID
+        import secrets
+        exchange_id = secrets.token_urlsafe(32)
+        
+        # Create key exchange in database
+        result = create_key_exchange(
+            tenant_id=tenant_id,
+            exchange_id=exchange_id,
+            sharer_email=sharer_email,
+            recipient_email=recipient_email,
+            document_id=document_id,
+            filename=filename,
+            sharer_public_key=sharer_public_key,
+            expires_at=None  # Could add expiration
         )
+        
+        if not result.get('success'):
+            return jsonify({'error': 'Failed to create key exchange'}), 500
 
         sharer_fingerprint = generate_fingerprint(sharer_public_key)
+
+        # Log activity
+        log_sharing_activity(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            filename=filename,
+            action='key_exchange_initiated',
+            shared_by_email=sharer_email,
+            shared_with_email=recipient_email,
+            details={'exchange_id': exchange_id}
+        )
 
         return jsonify({
             'success': True,
@@ -803,50 +1116,76 @@ def initiate_key_exchange():
         }), 200
 
     except Exception as e:
+        print(f"❌ Error initiating key exchange: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @csrf.exempt
 @app.route('/get_pending_verifications', methods=['GET'])
 def get_pending_verifications():
-    """Get pending key exchange verifications for current user"""
+    """Get pending key exchange verifications for current user - uses database"""
     try:
         tenant_id = get_current_tenant()
-        key_exchanges = load_key_exchanges()
-
-        pending = []
-        for exchange_id, exchange in key_exchanges.items():
-            if exchange.get('status') == 'pending':
-                sharer_tenant = str(exchange.get('sharer_tenant', ''))
-                recipient_tenant = str(exchange.get('recipient_tenant', ''))
-
-                if str(tenant_id) == sharer_tenant or str(tenant_id) == recipient_tenant or recipient_tenant == 'pending':
-                    is_sharer = str(tenant_id) == sharer_tenant
-                    pending.append({
-                        'exchange_id': exchange_id,
-                        'filename': exchange.get('filename'),
-                        'sharer_id': exchange.get('sharer_id'),
-                        'recipient_email': exchange.get('recipient_email'),
-                        'sharer_fingerprint': generate_fingerprint(exchange.get('sharer_public_key', '')),
-                        'recipient_fingerprint': exchange.get('recipient_fingerprint', ''),
-                        'created': exchange.get('created'),
-                        'recipient_verified': exchange.get('recipient_verified', False),
-                        'sharer_verified': exchange.get('sharer_verified', False),
-                        'recipient_confirmed': exchange.get('recipient_confirmed', False),
-                        'is_sharer': is_sharer
-                    })
+        user_email = session.get('email', '')
+        
+        from sqlalchemy import text
+        
+        with db.engine.connect() as conn:
+            conn.execute(text(f'SET search_path TO tenant_{tenant_id}'))
+            
+            # Get all pending key exchanges for this tenant
+            query = text("""
+                SELECT 
+                    ke.exchange_id,
+                    f.file_name,
+                    ke.sharer_email,
+                    ke.recipient_email,
+                    ke.sharer_public_key,
+                    ke.recipient_fingerprint,
+                    ke.created_at,
+                    ke.recipient_verified,
+                    ke.sharer_verified,
+                    ke.recipient_confirmed,
+                    ke.status
+                FROM key_exchanges ke
+                JOIN files f ON ke.document_id = f.document_id
+                WHERE ke.status = 'pending'
+                AND (ke.sharer_email = :user_email OR ke.recipient_email = :user_email)
+            """)
+            
+            result = conn.execute(query, {'user_email': user_email})
+            rows = result.fetchall()
+            
+            pending = []
+            for row in rows:
+                is_sharer = row[2] == user_email  # sharer_email
+                pending.append({
+                    'exchange_id': row[0],
+                    'filename': row[1],
+                    'sharer_id': row[2],
+                    'recipient_email': row[3],
+                    'sharer_fingerprint': generate_fingerprint(row[4]) if row[4] else '',
+                    'recipient_fingerprint': row[5] or '',
+                    'created': row[6].isoformat() if row[6] else '',
+                    'recipient_verified': row[7],
+                    'sharer_verified': row[8],
+                    'recipient_confirmed': row[9],
+                    'is_sharer': is_sharer
+                })
 
         return jsonify({'success': True, 'pending_verifications': pending}), 200
 
     except Exception as e:
+        print(f"❌ Error getting pending verifications: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @csrf.exempt
 @app.route('/submit_recipient_key/<exchange_id>', methods=['POST'])
 def submit_recipient_key(exchange_id):
-    """Recipient submits their public key for the key exchange"""
+    """Recipient submits their public key for the key exchange - uses database"""
     try:
+        tenant_id = get_current_tenant()
         data = request.json
         recipient_email = data.get('recipient_email')
 
@@ -863,17 +1202,20 @@ def submit_recipient_key(exchange_id):
 
         recipient_fingerprint = generate_fingerprint(public_key_pem)
 
-        key_exchanges = load_key_exchanges()
-        if exchange_id not in key_exchanges:
+        # Get exchange from database
+        exchange = get_key_exchange(tenant_id, exchange_id)
+        if not exchange:
             return jsonify({'error': 'Exchange not found'}), 404
 
-        exchange = key_exchanges[exchange_id]
-        exchange['recipient_public_key'] = public_key_pem
-        exchange['recipient_email'] = recipient_email or exchange.get('recipient_email')
-        exchange['recipient_verified'] = True
-        exchange['recipient_fingerprint'] = recipient_fingerprint
-
-        save_key_exchanges(key_exchanges)
+        # Update exchange with recipient data
+        update_key_exchange(
+            tenant_id=tenant_id,
+            exchange_id=exchange_id,
+            recipient_public_key=public_key_pem,
+            recipient_email=recipient_email or exchange.get('recipient_email'),
+            recipient_verified=True,
+            recipient_fingerprint=recipient_fingerprint
+        )
 
         return jsonify({
             'success': True,
@@ -888,16 +1230,17 @@ def submit_recipient_key(exchange_id):
 @csrf.exempt
 @app.route('/verify_recipient_fingerprint/<exchange_id>', methods=['POST'])
 def verify_recipient_fingerprint(exchange_id):
-    """Sharer verifies recipient's fingerprint"""
+    """Sharer verifies recipient's fingerprint - uses database"""
     try:
+        tenant_id = get_current_tenant()
         data = request.json
         recipient_fingerprint = data.get('recipient_fingerprint')
 
-        key_exchanges = load_key_exchanges()
-        if exchange_id not in key_exchanges:
+        # Get exchange from database
+        exchange = get_key_exchange(tenant_id, exchange_id)
+        if not exchange:
             return jsonify({'error': 'Exchange not found'}), 404
 
-        exchange = key_exchanges[exchange_id]
         actual_fingerprint = generate_fingerprint(exchange.get('recipient_public_key'))
 
         if not actual_fingerprint:
@@ -906,11 +1249,16 @@ def verify_recipient_fingerprint(exchange_id):
         if recipient_fingerprint != actual_fingerprint:
             return jsonify({'success': False, 'error': 'Fingerprint mismatch!'}), 400
 
-        exchange['sharer_verified'] = True
-        if exchange.get('recipient_confirmed'):
-            exchange['status'] = 'verified'
-            add_verified_share_to_recipient(exchange_id, exchange)
-        save_key_exchanges(key_exchanges)
+        # Determine new status
+        new_status = 'verified' if exchange.get('recipient_confirmed') else exchange.get('status', 'pending')
+        
+        # Update exchange in database
+        update_key_exchange(
+            tenant_id=tenant_id,
+            exchange_id=exchange_id,
+            sharer_verified=True,
+            status=new_status
+        )
 
         return jsonify({'success': True, 'message': 'Recipient identity verified.'}), 200
 
@@ -921,16 +1269,17 @@ def verify_recipient_fingerprint(exchange_id):
 @csrf.exempt
 @app.route('/verify_sharer_fingerprint/<exchange_id>', methods=['POST'])
 def verify_sharer_fingerprint(exchange_id):
-    """Recipient verifies sharer's fingerprint"""
+    """Recipient verifies sharer's fingerprint - uses database"""
     try:
+        tenant_id = get_current_tenant()
         data = request.json
         sharer_fingerprint = data.get('sharer_fingerprint')
 
-        key_exchanges = load_key_exchanges()
-        if exchange_id not in key_exchanges:
+        # Get exchange from database
+        exchange = get_key_exchange(tenant_id, exchange_id)
+        if not exchange:
             return jsonify({'error': 'Exchange not found'}), 404
 
-        exchange = key_exchanges[exchange_id]
         actual_fingerprint = generate_fingerprint(exchange.get('sharer_public_key'))
 
         if not actual_fingerprint:
@@ -939,11 +1288,16 @@ def verify_sharer_fingerprint(exchange_id):
         if sharer_fingerprint != actual_fingerprint:
             return jsonify({'success': False, 'error': 'Fingerprint mismatch!'}), 400
 
-        exchange['recipient_confirmed'] = True
-        if exchange.get('sharer_verified'):
-            exchange['status'] = 'verified'
-            add_verified_share_to_recipient(exchange_id, exchange)
-        save_key_exchanges(key_exchanges)
+        # Determine new status
+        new_status = 'verified' if exchange.get('sharer_verified') else exchange.get('status', 'pending')
+        
+        # Update exchange in database
+        update_key_exchange(
+            tenant_id=tenant_id,
+            exchange_id=exchange_id,
+            recipient_confirmed=True,
+            status=new_status
+        )
 
         return jsonify({'success': True, 'message': 'Sharer identity verified.'}), 200
 
@@ -954,38 +1308,47 @@ def verify_sharer_fingerprint(exchange_id):
 @app.route('/verify-identities', methods=['GET'])
 def verify_identities():
     tenant_id = get_current_tenant()
-    account_info = DUMMY_ACCOUNTS.get(tenant_id, {'name': 'Unknown'})
-    return render_template('users/verify_identities.html', tenant_id=tenant_id, account_name=account_info['name'])
+    user_email = session.get('email', 'Unknown')
+    return render_template('users/verify_identities.html', tenant_id=tenant_id, account_name=user_email)
 
 
 @csrf.exempt
 @app.route('/clear_pending_verifications', methods=['POST'])
 def clear_pending_verifications():
-    """Clear all pending verifications for current tenant"""
+    """Clear all pending verifications for current tenant - uses database"""
     try:
         tenant_id = get_current_tenant()
-        key_exchanges = load_key_exchanges()
+        user_email = session.get('email', '')
         
-        # Filter out exchanges for this tenant (where tenant is sharer or recipient)
-        exchanges_to_remove = [
-            exchange_id for exchange_id, exchange in key_exchanges.items()
-            if exchange.get('sharer_tenant') == tenant_id or exchange.get('recipient_tenant') == tenant_id or exchange.get('recipient_tenant') == 'pending'
-        ]
+        from sqlalchemy import text
         
-        for exchange_id in exchanges_to_remove:
-            del key_exchanges[exchange_id]
+        with db.engine.connect() as conn:
+            conn.execute(text(f'SET search_path TO tenant_{tenant_id}'))
+            
+            # Delete all pending key exchanges for this user
+            delete_query = text("""
+                DELETE FROM key_exchanges
+                WHERE status = 'pending'
+                AND (sharer_email = :user_email OR recipient_email = :user_email)
+            """)
+            
+            result = conn.execute(delete_query, {'user_email': user_email})
+            conn.commit()
+            
+            deleted_count = result.rowcount
         
-        save_key_exchanges(key_exchanges)
-        return jsonify({'success': True, 'message': f'Cleared {len(exchanges_to_remove)} pending verification(s).'}), 200
+        return jsonify({'success': True, 'message': f'Cleared {deleted_count} pending verification(s).'}), 200
     
     except Exception as e:
+        print(f"❌ Error clearing pending verifications: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @csrf.exempt
+@csrf.exempt
 @app.route('/validate_share_link', methods=['GET', 'POST'])
 def validate_share_link():
-    """Validate a share link and return file info"""
+    """Validate a share link and return file info - uses database"""
     try:
         # Handle both GET and POST requests
         if request.method == 'GET':
@@ -1004,85 +1367,86 @@ def validate_share_link():
         if not share_token:
             return jsonify({'error': 'Share token required'}), 400
         
-        # Load share links
-        share_links = load_share_links()
+        # Get share link from database
+        link_info = get_share_link_by_token(tenant_id, share_token)
         
-        # Check if token exists
-        if share_token not in share_links:
+        if not link_info:
             return jsonify({'error': 'Invalid or expired share link'}), 404
         
-        link_info = share_links[share_token]
-        
         # Check if password is required
-        if link_info.get('password'):
+        if link_info.get('password_hash'):
             if not password:
                 return jsonify({'error': 'Password required', 'requires_password': True}), 401
-            if not check_password_hash(link_info['password'], password):
+            from werkzeug.security import check_password_hash
+            if not check_password_hash(link_info['password_hash'], password):
                 return jsonify({'error': 'Incorrect password'}), 401
         
-        filename = link_info['filename']
-        file_tenant_id = link_info['tenant_id']
+        document_id = link_info['document_id']
+        filename = link_info['file_name']
         require_key_exchange = bool(link_info.get('require_key_exchange'))
         exchange_id = link_info.get('exchange_id')
         
-        # Get the actual file path
-        tenant_folder = get_tenant_upload_folder(file_tenant_id)
-        file_path = os.path.join(tenant_folder, filename)
+        # Get file from database
+        file_record = get_file_from_db(tenant_id, document_id=document_id)
         
-        if not os.path.exists(file_path):
+        if not file_record:
             return jsonify({'error': 'File not found'}), 404
 
         verification_status = 'not_required'
         if require_key_exchange:
-            key_exchanges = load_key_exchanges()
-            if not exchange_id or exchange_id not in key_exchanges:
+            if not exchange_id:
                 verification_status = 'exchange_not_found'
             else:
-                exchange = key_exchanges[exchange_id]
-                if exchange.get('recipient_tenant') == 'pending':
-                    exchange['recipient_tenant'] = tenant_id
-                    save_key_exchanges(key_exchanges)
-                verification_status = 'verified' if exchange.get('status') == 'verified' else 'pending'
+                exchange = get_key_exchange(tenant_id, exchange_id)
+                if not exchange:
+                    verification_status = 'exchange_not_found'
+                else:
+                    verification_status = 'verified' if exchange.get('status') == 'verified' else 'pending'
         
-        # Get file info
-        file_stats = os.stat(file_path)
+        # Build file info response
         file_info = {
             'name': filename,
-            'size': file_stats.st_size,
-            'modified': datetime.fromtimestamp(file_stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
-            'owner': link_info.get('owner', 'Unknown'),
-            'sensitivity': 'Shared',
-            'url': f"/download/shared/{filename}?share={share_token}&tenant={file_tenant_id}",
+            'size': file_record['file_size'],
+            'modified': file_record['updated_at'].strftime('%Y-%m-%d %H:%M:%S') if file_record.get('updated_at') else 'N/A',
+            'owner': link_info.get('created_by', 'Unknown'),
+            'sensitivity': file_record.get('sensitivity', 'Shared'),
+            'url': f"/download/shared/{filename}?share={share_token}&tenant={tenant_id}",
             'share_token': share_token,
-            'owner_tenant_id': file_tenant_id,
+            'owner_tenant_id': tenant_id,
             'require_key_exchange': require_key_exchange,
             'exchange_id': exchange_id,
-            'verification_status': verification_status
+            'verification_status': verification_status,
+            'document_id': document_id
         }
         
-        # Get version history for this file
-        versions = get_file_versions(filename, file_tenant_id)
-        
-        # Save to received shares for the current tenant (recipient)
-        received_shares = load_received_shares()
-        recipient_key = f'tenant_{tenant_id}'
-        if recipient_key not in received_shares:
-            received_shares[recipient_key] = []
-        
-        # Check if this file is already in the recipient's shared files
-        existing = next((f for f in received_shares[recipient_key] if f['name'] == filename and f.get('owner_tenant_id') == file_tenant_id), None)
-        if not existing:
-            # Add date_shared to track when file was shared
-            file_info['date_shared'] = datetime.now().strftime('%Y-%m-%d')
-            received_shares[recipient_key].append(file_info)
-        else:
-            existing.update({
-                'url': file_info['url'],
-                'require_key_exchange': file_info.get('require_key_exchange'),
-                'exchange_id': file_info.get('exchange_id'),
-                'verification_status': file_info.get('verification_status')
+        # Get version history from database
+        versions_raw = get_file_versions_from_db(tenant_id, document_id)
+        versions = []
+        for v in versions_raw:
+            versions.append({
+                "version": v['version_number'],
+                "name": v['file_name'],
+                "uploaded_by": v['uploaded_by'],
+                "date": v['uploaded_at'].strftime('%d %B %Y') if v.get('uploaded_at') else 'N/A',
+                "size": v['file_size'],
+                "hash": v['file_hash'],
+                "is_current": v.get('is_current', False)
             })
-        save_received_shares(received_shares)
+        
+        # Update access tracking
+        update_share_link_access(tenant_id, share_token)
+        
+        # Log access
+        log_sharing_activity(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            filename=filename,
+            action='accessed',
+            shared_by_email=link_info['created_by'],
+            shared_via_link=share_token,
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get('User-Agent')
+        )
         
         return jsonify({
             'success': True,
@@ -1091,13 +1455,16 @@ def validate_share_link():
         })
         
     except Exception as e:
+        print(f"❌ Error validating share link: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @csrf.exempt
 @app.route('/download/shared/<path:filename>', methods=['GET'])
 def download_shared_file(filename):
+    """Download shared file - uses database"""
     from urllib.parse import unquote
+    from io import BytesIO
     filename = unquote(filename)
     share_token = request.args.get('share')
     tenant_id = request.args.get('tenant', get_current_tenant())
@@ -1105,38 +1472,58 @@ def download_shared_file(filename):
     if not share_token:
         return "Missing share token", 400
 
-    share_links = load_share_links()
-    if share_token not in share_links:
+    # Get share link from database
+    link_info = get_share_link_by_token(tenant_id, share_token)
+    if not link_info:
         return "Invalid or expired share link", 404
 
-    link_info = share_links[share_token]
-    if link_info.get('filename') != filename:
+    if link_info.get('file_name') != filename:
         return "Share link does not match file", 403
 
-    owner_tenant_id = str(link_info.get('tenant_id'))
-    tenant_folder = get_tenant_upload_folder(owner_tenant_id)
-    file_path = os.path.join(tenant_folder, filename)
-    version_path = os.path.join(app.config['VERSIONS_FOLDER'], filename)
-    file_in_tenant = os.path.exists(file_path)
-    file_in_versions = os.path.exists(version_path)
-    if not file_in_tenant and not file_in_versions:
-        return "File not found", 404
-
+    document_id = link_info['document_id']
+    
+    # Check key exchange verification if required
     if link_info.get('require_key_exchange'):
         exchange_id = link_info.get('exchange_id')
-        key_exchanges = load_key_exchanges()
-        if not exchange_id or exchange_id not in key_exchanges:
+        if not exchange_id:
             return "Identity not verified", 403
-        exchange = key_exchanges[exchange_id]
-        if exchange.get('status') != 'verified':
+        exchange = get_key_exchange(tenant_id, exchange_id)
+        if not exchange or exchange.get('status') != 'verified':
             return "Identity not verified", 403
 
-    source_path = file_path if file_in_tenant else version_path
-    actual_ext = detect_file_extension(source_path)
-    download_name = os.path.splitext(filename)[0] + actual_ext
-    if file_in_tenant:
-        return send_from_directory(tenant_folder, filename, as_attachment=True, download_name=download_name)
-    return send_from_directory(app.config['VERSIONS_FOLDER'], filename, as_attachment=True, download_name=download_name)
+    # Get file from database
+    file_record = get_file_from_db(tenant_id, document_id=document_id)
+    if not file_record:
+        return "File not found", 404
+    
+    file_data = file_record['file_data']
+    actual_filename = file_record['file_name']
+    
+    # Detect file extension if needed
+    actual_ext = detect_file_extension_from_data(file_data)
+    download_name = os.path.splitext(actual_filename)[0] + actual_ext
+    
+    # Update access count
+    update_share_link_access(tenant_id, share_token)
+    
+    # Log download activity
+    log_sharing_activity(
+        tenant_id=tenant_id,
+        document_id=document_id,
+        filename=actual_filename,
+        action='downloaded',
+        shared_by_email=link_info['created_by'],
+        shared_via_link=share_token,
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent')
+    )
+    
+    return send_file(
+        BytesIO(file_data),
+        as_attachment=True,
+        download_name=download_name,
+        mimetype='application/octet-stream'
+    )
 
 
 @csrf.exempt
@@ -1179,26 +1566,46 @@ def file_detail(filename):
     from urllib.parse import unquote
     tenant_id = get_current_tenant()
     filename = unquote(filename)
-    tenant_folder = get_tenant_upload_folder(tenant_id)
-    file_path = os.path.join(tenant_folder, filename)
     
-    if not os.path.exists(file_path):
-        return "File not found", 404
+    # Get file from database
+    file_record = get_file_from_db(tenant_id, filename=filename)
     
-    account_info = DUMMY_ACCOUNTS.get(tenant_id, {'owner': 'Unknown'})
+    if not file_record:
+        flash("File not found", "danger")
+        return redirect(url_for('myfiles'))
+    
     file_info = {
-        "name": filename,
-        "size": os.path.getsize(file_path),
-        "url": url_for("download_file", filename=filename, tenant=tenant_id),
-        "hash": compute_sha256(file_path),
-        "modified": datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%d %B %Y'),
-        "owner": account_info['owner'],
-        "uploaded_by": account_info['owner']
+        "name": file_record['file_name'],
+        "size": file_record['file_size'],
+        "url": url_for("download_file", filename=file_record['file_name'], tenant=tenant_id),
+        "hash": file_record['file_hash'],
+        "modified": file_record['updated_at'].strftime('%d %B %Y') if file_record.get('updated_at') else 'N/A',
+        "owner": file_record['owner_email'],
+        "uploaded_by": file_record['owner_email'],
+        "sensitivity": file_record.get('sensitivity', 'Public'),
+        "classification": file_record.get('classification', 'N/A'),
+        "risk_level": file_record.get('risk_level', 'N/A'),
+        "notes": file_record.get('notes', ''),
+        "document_id": file_record['document_id']
     }
     
-    # Get version history
-    tenant_id = get_current_tenant()
-    versions = get_file_versions(filename, tenant_id)
+    # Get version history from database
+    versions_raw = get_file_versions_from_db(tenant_id, file_record['document_id'])
+    
+    # Format versions for template
+    versions = []
+    for v in versions_raw:
+        versions.append({
+            "version": v['version_number'],
+            "name": v['file_name'],
+            "uploaded_by": v['uploaded_by'],
+            "date": v['uploaded_at'].strftime('%d %B %Y') if v.get('uploaded_at') else 'N/A',
+            "size": v['file_size'],
+            "hash": v['file_hash'],
+            "is_current": v.get('is_current', False),
+            "document_id": file_record['document_id'],
+            "version_number": v['version_number']
+        })
     
     return render_template("file_detail.html", file=file_info, versions=versions)
 
@@ -1239,6 +1646,9 @@ def upload_temp():
 @csrf.exempt
 def confirm_upload(temp_id):
     tenant_id = get_current_tenant()
+    user_email = session.get('email', 'Unknown')
+    user_id = session.get('user_id', 0)
+    
     pending_path = _pending_path(temp_id)
     if not pending_path or not os.path.exists(pending_path):
         return "Pending file not found", 404
@@ -1252,48 +1662,48 @@ def confirm_upload(temp_id):
     if request.method == 'POST':
         target_name = request.form.get('name') or original_name
         target_safe = sanitize_filename(target_name)
-        tenant_folder = get_tenant_upload_folder(tenant_id)
-        save_path = os.path.join(tenant_folder, target_safe)
-
-        if os.path.exists(save_path):
-            name, ext = os.path.splitext(target_safe)
-            counter = 1
-            while os.path.exists(save_path):
-                target_safe = f"{name}_{counter}{ext}"
-                save_path = os.path.join(tenant_folder, target_safe)
-                counter += 1
-
-        os.replace(pending_path, save_path)
-        size_final = os.path.getsize(save_path)
-        file_hash_final = compute_sha256(save_path)
-        file_url = url_for('download_file', filename=target_safe, tenant=tenant_id)
-
-        sensitivity = (request.form.get('sensitivity') or '').strip()
-        owner = (request.form.get('owner') or 'You').strip()
+        
+        # Read file data for database storage
+        with open(pending_path, 'rb') as f:
+            file_data = f.read()
+        
+        # Get metadata from form
+        sensitivity = (request.form.get('sensitivity') or 'Public').strip()
         notes = (request.form.get('notes') or '').strip()
         risk_type = (request.form.get('risk_type') or '').strip()
-
-        set_file_metadata(target_safe, tenant_id, {
-            "sensitivity": sensitivity or "Unclassified",
-            "owner": owner,
-            "notes": notes,
-            "risk_type": risk_type,
-            "updated": datetime.now().isoformat()
-        })
         
-        # Add initial version entry
-        version_info = {
-            "version": 1,
-            "name": target_safe,
-            "uploaded_by": "You",
-            "date": datetime.now().strftime('%d %B %Y'),
-            "size": size_final,
-            "hash": file_hash_final,
-            "is_current": True
-        }
-        add_version(target_safe, version_info, tenant_id)
+        # Determine MIME type
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(target_safe)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
         
-        return redirect(url_for('file_detail', filename=target_safe, tenant=tenant_id))
+        # Store file in database
+        result = store_file_in_db(
+            tenant_id=tenant_id,
+            file_data=file_data,
+            filename=target_safe,
+            owner_user_id=user_id,
+            owner_email=user_email,
+            file_hash=file_hash,
+            mime_type=mime_type,
+            sensitivity=sensitivity,
+            classification=risk_type if risk_type else None,
+            notes=notes
+        )
+        
+        # Clean up pending file
+        try:
+            os.remove(pending_path)
+        except:
+            pass
+        
+        if result.get('success'):
+            flash(f"✅ File '{target_safe}' uploaded successfully!", "success")
+            return redirect(url_for('file_detail', filename=target_safe, tenant=tenant_id))
+        else:
+            flash(f"❌ Failed to upload file: {result.get('error')}", "danger")
+            return redirect(url_for('myfiles'))
 
     return render_template(
         "users/confirm_upload.html",
@@ -1303,8 +1713,8 @@ def confirm_upload(temp_id):
             "size": size,
             "hash": file_hash,
             "modified": modified,
-            "owner": "You",
-            "uploaded_by": "You"
+            "owner": user_email,
+            "uploaded_by": user_email
         }
     )
 
@@ -1383,12 +1793,13 @@ def upload_version_temp(filename):
     if not allowed_file(file.filename):
         return jsonify({"error": "Invalid file type"}), 400
 
-    # Get tenant ID and verify original file exists
+    # Get tenant ID and verify original file exists in database
     tenant_id = get_current_tenant()
-    tenant_folder = get_tenant_upload_folder(tenant_id)
-    current_path = os.path.join(tenant_folder, filename)
-    if not os.path.exists(current_path):
-        return jsonify({"error": "Original file not found"}), 404
+    
+    # Check if file exists in database
+    existing_file = get_file_from_db(tenant_id, filename=filename)
+    if not existing_file:
+        return jsonify({"error": "Original file not found in database"}), 404
     
     # Save to temp folder
     from uuid import uuid4
@@ -1412,11 +1823,13 @@ def upload_version_temp(filename):
 @app.route('/upload/version/confirm/<temp_id>/<path:original_filename>', methods=['GET', 'POST'])
 @csrf.exempt
 def confirm_version_upload(temp_id, original_filename):
-    """Confirm and finalize version upload."""
+    """Confirm and finalize version upload to database."""
     from urllib.parse import unquote
     original_filename = unquote(original_filename)
     
     tenant_id = get_current_tenant()
+    user_email = session.get('email', 'Unknown')
+    
     pending_path = _pending_path(temp_id)
     if not pending_path or not os.path.exists(pending_path):
         return "Pending file not found", 404
@@ -1428,83 +1841,47 @@ def confirm_version_upload(temp_id, original_filename):
     modified = datetime.fromtimestamp(os.path.getmtime(pending_path)).strftime('%d %B %Y')
 
     if request.method == 'POST':
-        # Get tenant-specific folder and current file path
-        tenant_folder = get_tenant_upload_folder(tenant_id)
-        current_path = os.path.join(tenant_folder, original_filename)
-
-        if not os.path.exists(current_path):
-            return "Original file not found", 404
-
-        # Ensure versions folder exists
-        os.makedirs(app.config['VERSIONS_FOLDER'], exist_ok=True)
-
-        # Get current versions
-        versions = get_file_versions(original_filename, tenant_id)
-        next_version = len(versions) + 1
-
-        # Move current file to versions folder
-        # The current file should be saved with its current version number and ACTUAL detected extension
-        name, original_ext = os.path.splitext(original_filename)
+        # Get original file from database
+        existing_file = get_file_from_db(tenant_id, filename=original_filename)
+        if not existing_file:
+            flash("Original file not found", "danger")
+            return redirect(url_for('myfiles'))
         
-        # Find the current version number
-        current_version_num = next_version - 1
-        for v in versions:
-            if v.get('is_current'):
-                current_version_num = v['version']
-                break
+        document_id = existing_file['document_id']
         
-        # Detect the actual file type from the file at current_path (could be JPG, PDF, etc)
-        actual_ext = detect_file_extension(current_path)
-        current_version_filename = f"{name}_v{current_version_num}{actual_ext}"
-        current_version_path = os.path.join(app.config['VERSIONS_FOLDER'], current_version_filename)
-        shutil.copy2(current_path, current_version_path)
-
-        # Update the previous version entry to include version_file
-        if versions:
-            for i, v in enumerate(versions):
-                if v['is_current']:
-                    versions[i]['is_current'] = False
-                    versions[i]['version_file'] = current_version_filename
-                elif 'version_file' not in v:
-                    # Older versions that don't have version_file yet
-                    # Try to detect their extension, fall back to original if we can't
-                    version_name = v.get('name', original_filename)
-                    _, stored_ext = os.path.splitext(version_name)
-                    old_version_filename = f"{name}_v{v['version']}{stored_ext}"
-                    versions[i]['version_file'] = old_version_filename
-
-        # Move pending file to become current version
-        final_name = request.form.get('name') or new_filename
+        # Read new version data
+        with open(pending_path, 'rb') as f:
+            file_data = f.read()
         
-        # Ensure the old file is completely removed before replacing
-        if os.path.exists(current_path):
-            os.remove(current_path)
+        # Determine MIME type
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(new_filename)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
         
-        # Move the new file to replace it
-        shutil.move(pending_path, current_path)
+        # Add new version to database
+        result = add_file_version(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            file_data=file_data,
+            filename=new_filename,
+            uploaded_by=user_email,
+            file_hash=file_hash,
+            mime_type=mime_type
+        )
         
-        size = os.path.getsize(current_path)
-        file_hash = compute_sha256(current_path)
-
-        # Add new version entry
-        version_info = {
-            "version": next_version,
-            "name": final_name,
-            "uploaded_by": "You",
-            "date": datetime.now().strftime('%d %B %Y'),
-            "size": size,
-            "hash": file_hash,
-            "is_current": True
-        }
+        # Clean up pending file
+        try:
+            os.remove(pending_path)
+        except:
+            pass
         
-        # Update version history
-        versions.append(version_info)
-        versions_data = load_versions()
-        version_key = f"tenant_{tenant_id}/{original_filename}"
-        versions_data[version_key] = versions
-        save_versions(versions_data)
-
-        return redirect(url_for('file_detail', filename=original_filename, tenant=tenant_id))
+        if result.get('success'):
+            flash(f"✅ Version {result['version_number']} uploaded successfully!", "success")
+            return redirect(url_for('file_detail', filename=original_filename))
+        else:
+            flash(f"❌ Failed to upload version: {result.get('error')}", "danger")
+            return redirect(url_for('file_detail', filename=original_filename))
 
     return render_template(
         "users/confirm_upload.html",
@@ -1514,31 +1891,69 @@ def confirm_version_upload(temp_id, original_filename):
             "size": size,
             "hash": file_hash,
             "modified": modified,
-            "owner": "You",
-            "uploaded_by": "You"
+            "owner": user_email,
+            "uploaded_by": user_email
         },
         is_version=True,
         original_filename=original_filename
     )
 
 
-@app.route('/download/version/<path:filename>')
-def download_version(filename):
-    """Download a specific version from the versions folder."""
-    from urllib.parse import unquote
-    filename = unquote(filename)
-    version_path = os.path.join(app.config['VERSIONS_FOLDER'], filename)
+@app.route('/download/version/<document_id>/<int:version_number>')
+def download_version(document_id, version_number):
+    """Download a specific version from the database."""
+    from io import BytesIO
+    tenant_id = get_current_tenant()
     
-    # Detect actual file type
-    actual_ext = detect_file_extension(version_path)
-    download_name = os.path.splitext(filename)[0] + actual_ext
-    
-    return send_from_directory(app.config['VERSIONS_FOLDER'], filename, as_attachment=True, download_name=download_name)
+    # Get specific version from database
+    schema_name = f"tenant_{tenant_id}"
+    try:
+        from database import MasterSessionLocal, text
+        session = MasterSessionLocal()
+        session.execute(text(f'SET search_path TO "{schema_name}", public'))
+        
+        result = session.execute(text(f'''
+            SELECT file_name, file_data, file_size, file_hash, mime_type
+            FROM "{schema_name}".file_versions
+            WHERE document_id = :document_id AND version_number = :version_number
+        '''), {'document_id': document_id, 'version_number': version_number}).fetchone()
+        
+        session.close()
+        
+        if not result:
+            flash("Version not found", "danger")
+            return redirect(url_for('myfiles'))
+        
+        file_name, file_data, file_size, file_hash, mime_type = result
+        
+        # Create BytesIO from blob
+        file_stream = BytesIO(file_data)
+        
+        # Determine download name
+        import mimetypes
+        ext = mimetypes.guess_extension(mime_type) or ''
+        if not ext:
+            _, ext = os.path.splitext(file_name)
+        
+        download_name = f"{os.path.splitext(file_name)[0]}_v{version_number}{ext}"
+        
+        return send_file(
+            file_stream,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype=mime_type or 'application/octet-stream'
+        )
+        
+    except Exception as e:
+        print(f"❌ Error downloading version: {e}")
+        flash("Error downloading version", "danger")
+        return redirect(url_for('myfiles'))
 
 
 @app.route('/rename', methods=['POST'])
 @csrf.exempt
 def rename_file():
+    """Rename a file in the database"""
     tenant_id = get_current_tenant()
     data = request.get_json()
     old_name = data.get('old_name')
@@ -1547,21 +1962,41 @@ def rename_file():
     if not old_name or not new_name:
         return jsonify({"error": "Missing filename"}), 400
 
-    tenant_folder = get_tenant_upload_folder(tenant_id)
-    old_path = os.path.join(tenant_folder, sanitize_filename(old_name))
-    new_path = os.path.join(tenant_folder, sanitize_filename(new_name))
-
-    if not os.path.exists(old_path):
+    # Check if old file exists in database
+    old_file = get_file_from_db(tenant_id, filename=old_name)
+    if not old_file:
         return jsonify({"error": "File not found"}), 404
 
-    if os.path.exists(new_path):
+    # Check if new name already exists
+    existing_new = get_file_from_db(tenant_id, filename=new_name)
+    if existing_new:
         return jsonify({"error": "File with that name already exists"}), 409
 
     try:
-        os.rename(old_path, new_path)
-        rename_file_metadata(sanitize_filename(old_name), sanitize_filename(new_name), tenant_id)
+        # Update filename in database
+        from database import MasterSessionLocal, text
+        schema_name = f"tenant_{tenant_id}"
+        session = MasterSessionLocal()
+        session.execute(text(f'SET search_path TO "{schema_name}", public'))
+        
+        # Update main file record
+        session.execute(text(f'''
+            UPDATE "{schema_name}".files
+            SET file_name = :new_name, updated_at = NOW()
+            WHERE document_id = :document_id
+        '''), {'new_name': sanitize_filename(new_name), 'document_id': old_file['document_id']})
+        
+        session.commit()
+        session.close()
+        
         return jsonify({"message": "File renamed successfully"}), 200
     except Exception as e:
+        print(f"❌ Error renaming file: {e}")
+        try:
+            session.rollback()
+            session.close()
+        except:
+            pass
         return jsonify({"error": str(e)}), 500
 
 
@@ -1592,6 +2027,7 @@ def share_file():
 @app.route('/delete', methods=['POST'])
 @csrf.exempt
 def delete_file():
+    """Soft delete a file in the database (move to bin)"""
     tenant_id = get_current_tenant()
     data = request.get_json()
     filename = data.get('filename')
@@ -1599,133 +2035,115 @@ def delete_file():
     if not filename:
         return jsonify({"error": "Missing filename"}), 400
 
-    tenant_folder = get_tenant_upload_folder(tenant_id)
-    file_path = os.path.join(tenant_folder, sanitize_filename(filename))
-
-    if not os.path.exists(file_path):
+    # Get file from database
+    file_record = get_file_from_db(tenant_id, filename=filename)
+    if not file_record:
         return jsonify({"error": "File not found"}), 404
 
     try:
-        # Move file to bin instead of deleting
-        bin_key = move_file_to_bin(filename, tenant_id, file_path)
+        document_id = file_record['document_id']
         
-        # Delete the main file from original location
-        os.remove(file_path)
+        # Soft delete file in database (set is_deleted = TRUE)
+        result = delete_file_from_db(tenant_id, document_id, soft_delete=True)
         
-        # Delete all version files from versions folder (they're backed up in bin_metadata)
-        versions = get_file_versions(filename, tenant_id)
-        for version in versions:
-            if 'version_file' in version:
-                version_path = os.path.join(app.config['VERSIONS_FOLDER'], version['version_file'])
-                if os.path.exists(version_path):
-                    os.remove(version_path)
+        if not result.get('success'):
+            return jsonify({"error": "Failed to delete file"}), 500
         
-        # Delete version history from JSON
-        delete_file_versions(filename, tenant_id)
-
-        # Remove from received shares for all tenants (file no longer appears in shared_with_me)
-        received_shares = load_received_shares()
-        updated = False
-        for tenant_key, files in list(received_shares.items()):
-            filtered = [f for f in files if not (f.get('name') == filename and str(f.get('owner_tenant_id')) == str(tenant_id))]
-            if len(filtered) != len(files):
-                received_shares[tenant_key] = filtered
-                updated = True
-        if updated:
-            save_received_shares(received_shares)
-
-        # Remove share links that point to this file
-        share_links = load_share_links()
-        share_links_updated = False
-        for token, info in list(share_links.items()):
-            if info.get('filename') == filename and str(info.get('tenant_id')) == str(tenant_id):
-                del share_links[token]
-                share_links_updated = True
-        if share_links_updated:
-            save_share_links(share_links)
+        # TODO: Remove from shared_with_me for other users (update sharing table)
+        # TODO: Deactivate share links pointing to this file (update file_sharing_links table)
         
-        return jsonify({"message": "File moved to bin", "bin_key": bin_key}), 200
+        return jsonify({"message": "File moved to bin", "document_id": document_id}), 200
     except Exception as e:
+        print(f"❌ Error deleting file: {e}")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/bin', methods=['GET'])
 def view_bin():
-    """View all files in bin for current tenant"""
+    """View all soft-deleted files in bin for current tenant"""
     tenant_id = get_current_tenant()
-    account_info = DUMMY_ACCOUNTS.get(tenant_id, {'name': 'Unknown', 'owner': 'You'})
+    user_email = session.get('email', 'Unknown')
     
-    # Load bin metadata and filter by tenant
-    bin_metadata = load_bin_metadata()
+    # Get all deleted files from database
+    deleted_files = get_all_files_for_tenant(tenant_id, owner_email=user_email, include_deleted=True)
+    
     tenant_bin_files = []
-    
-    for bin_key, entry in bin_metadata.items():
-        if str(entry.get('tenant_id')) == str(tenant_id):
-            # Calculate days until auto-deletion
-            deleted_at = datetime.fromisoformat(entry['deleted_at'])
-            days_remaining = 30 - (datetime.now() - deleted_at).days
+    for file_record in deleted_files:
+        if file_record.get('is_deleted'):
+            # Calculate days until auto-deletion (30 days from deleted_at)
+            deleted_at = file_record.get('deleted_at')
+            if deleted_at:
+                from datetime import timezone
+                if deleted_at.tzinfo is None:
+                    deleted_at = deleted_at.replace(tzinfo=timezone.utc)
+                days_remaining = 30 - (datetime.now(timezone.utc) - deleted_at).days
+            else:
+                days_remaining = 30
             
             tenant_bin_files.append({
-                'bin_key': bin_key,
-                'original_filename': entry['original_filename'],
-                'deleted_at': entry['deleted_at'],
+                'document_id': file_record['document_id'],
+                'original_filename': file_record['file_name'],
+                'deleted_at': deleted_at.isoformat() if deleted_at else 'N/A',
                 'days_remaining': max(0, days_remaining),
-                'original_path': entry['original_path']
+                'file_size': file_record['file_size'],
+                'sensitivity': file_record.get('sensitivity', 'Public')
             })
     
     # Sort by deleted_at (newest first)
     tenant_bin_files.sort(key=lambda x: x['deleted_at'], reverse=True)
     
-    return render_template("users/bin.html", files=tenant_bin_files, tenant_id=tenant_id, account_name=account_info['name'])
+    return render_template("users/bin.html", files=tenant_bin_files, tenant_id=tenant_id, account_name=user_email)
 
 
-@app.route('/bin/restore/<path:bin_key>', methods=['POST'])
+@app.route('/bin/restore/<document_id>', methods=['POST'])
 @csrf.exempt
-def restore_bin_file(bin_key):
-    """Restore a file from bin"""
+def restore_bin_file(document_id):
+    """Restore a soft-deleted file from bin"""
     tenant_id = get_current_tenant()
-    bin_metadata = load_bin_metadata()
     
-    # Verify the file belongs to current tenant
-    if bin_key not in bin_metadata:
+    # Verify file exists and belongs to current tenant
+    file_record = get_file_from_db(tenant_id, document_id=document_id, include_deleted=True)
+    
+    if not file_record:
         return jsonify({"error": "File not found in bin"}), 404
     
-    entry = bin_metadata[bin_key]
-    if str(entry.get('tenant_id')) != str(tenant_id):
-        return jsonify({"error": "Unauthorized"}), 403
+    if not file_record.get('is_deleted'):
+        return jsonify({"error": "File is not in bin"}), 400
     
     try:
-        success, message = restore_file_from_bin(bin_key)
-        if success:
-            return jsonify({"message": message}), 200
+        result = restore_file_from_db(tenant_id, document_id)
+        if result.get('success'):
+            return jsonify({"message": f"File '{file_record['file_name']}' restored successfully"}), 200
         else:
-            return jsonify({"error": message}), 500
+            return jsonify({"error": result.get('error', 'Failed to restore file')}), 500
     except Exception as e:
+        print(f"❌ Error restoring file: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/bin/permanent-delete/<path:bin_key>', methods=['POST'])
+@app.route('/bin/permanent-delete/<document_id>', methods=['POST'])
 @csrf.exempt
-def permanent_delete_bin_file(bin_key):
-    """Permanently delete a file from bin"""
+def permanent_delete_bin_file(document_id):
+    """Permanently delete a file from bin (hard delete from database)"""
     tenant_id = get_current_tenant()
-    bin_metadata = load_bin_metadata()
     
-    # Verify the file belongs to current tenant
-    if bin_key not in bin_metadata:
+    # Verify file exists and belongs to current tenant
+    file_record = get_file_from_db(tenant_id, document_id=document_id, include_deleted=True)
+    
+    if not file_record:
         return jsonify({"error": "File not found in bin"}), 404
     
-    entry = bin_metadata[bin_key]
-    if str(entry.get('tenant_id')) != str(tenant_id):
-        return jsonify({"error": "Unauthorized"}), 403
+    if not file_record.get('is_deleted'):
+        return jsonify({"error": "File is not in bin"}), 400
     
     try:
-        success, message = permanently_delete_from_bin(bin_key)
-        if success:
-            return jsonify({"message": message}), 200
+        result = delete_file_from_db(tenant_id, document_id, soft_delete=False)
+        if result.get('success'):
+            return jsonify({"message": f"File '{file_record['file_name']}' permanently deleted"}), 200
         else:
-            return jsonify({"error": message}), 500
+            return jsonify({"error": result.get('error', 'Failed to delete file')}), 500
     except Exception as e:
+        print(f"❌ Error permanently deleting file: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -1772,17 +2190,37 @@ def upload_file():
 
 @app.route('/uploads/<path:filename>', methods=['GET'])
 def download_file(filename):
+    """Download file from database blob storage"""
     from urllib.parse import unquote
+    from io import BytesIO
     tenant_id = get_current_tenant()
     filename = unquote(filename)
-    tenant_folder = get_tenant_upload_folder(tenant_id)
-    file_path = os.path.join(tenant_folder, filename)
     
-    # Detect actual file type
-    actual_ext = detect_file_extension(file_path)
-    download_name = os.path.splitext(filename)[0] + actual_ext
+    # Get file from database
+    file_record = get_file_from_db(tenant_id, filename=filename)
     
-    return send_from_directory(tenant_folder, filename, as_attachment=True, download_name=download_name)
+    if not file_record:
+        flash("File not found", "danger")
+        return redirect(url_for('myfiles'))
+    
+    # Create BytesIO object from blob data
+    file_data = BytesIO(file_record['file_data'])
+    
+    # Determine download name with proper extension
+    mime_type = file_record.get('mime_type', 'application/octet-stream')
+    import mimetypes
+    ext = mimetypes.guess_extension(mime_type) or ''
+    if not ext:
+        _, ext = os.path.splitext(filename)
+    
+    download_name = os.path.splitext(filename)[0] + ext
+    
+    return send_file(
+        file_data,
+        as_attachment=True,
+        download_name=download_name,
+        mimetype=mime_type
+    )
 
 #TODO JiaJun stuff -------------------------------------------------------------------------
 
@@ -1904,6 +2342,133 @@ def company_signup():
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             '''))
+
+            # NEW: File management tables with blob storage
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".files (
+                    id SERIAL PRIMARY KEY,
+                    document_id VARCHAR(50) NOT NULL,
+                    file_name VARCHAR(255) NOT NULL,
+                    owner_user_id INT NOT NULL,
+                    owner_email VARCHAR(255) NOT NULL,
+                    file_data BYTEA NOT NULL,
+                    file_size BIGINT NOT NULL,
+                    file_hash VARCHAR(64) NOT NULL,
+                    mime_type VARCHAR(100),
+                    sensitivity VARCHAR(50) DEFAULT 'Public',
+                    classification VARCHAR(50),
+                    risk_level VARCHAR(50),
+                    notes TEXT,
+                    is_current_version BOOLEAN DEFAULT TRUE,
+                    is_deleted BOOLEAN DEFAULT FALSE,
+                    deleted_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            '''))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_files_document_id ON "{schema_name}".files(document_id)'))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_files_owner ON "{schema_name}".files(owner_user_id)'))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_files_current ON "{schema_name}".files(is_current_version)'))
+
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".file_versions (
+                    id SERIAL PRIMARY KEY,
+                    document_id VARCHAR(50) NOT NULL,
+                    version_number INT NOT NULL,
+                    file_name VARCHAR(255) NOT NULL,
+                    file_data BYTEA NOT NULL,
+                    file_size BIGINT NOT NULL,
+                    file_hash VARCHAR(64) NOT NULL,
+                    mime_type VARCHAR(100),
+                    uploaded_by VARCHAR(255) NOT NULL,
+                    uploaded_at TIMESTAMP DEFAULT NOW(),
+                    is_current BOOLEAN DEFAULT FALSE,
+                    UNIQUE(document_id, version_number)
+                )
+            '''))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_versions_document ON "{schema_name}".file_versions(document_id)'))
+
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".file_sharing_links (
+                    id SERIAL PRIMARY KEY,
+                    document_id VARCHAR(50) NOT NULL,
+                    file_name VARCHAR(255) NOT NULL,
+                    share_token VARCHAR(255) UNIQUE NOT NULL,
+                    password_hash VARCHAR(255),
+                    require_key_exchange BOOLEAN DEFAULT FALSE,
+                    exchange_id VARCHAR(255),
+                    created_by VARCHAR(255) NOT NULL,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    expires_at TIMESTAMP,
+                    last_accessed TIMESTAMP,
+                    access_count INT DEFAULT 0
+                )
+            '''))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_token ON "{schema_name}".file_sharing_links(share_token)'))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_document ON "{schema_name}".file_sharing_links(document_id)'))
+
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".sharing (
+                    id SERIAL PRIMARY KEY,
+                    document_id VARCHAR(50) NOT NULL,
+                    file_name VARCHAR(255) NOT NULL,
+                    shared_with_email VARCHAR(255) NOT NULL,
+                    shared_by_email VARCHAR(255) NOT NULL,
+                    access_level VARCHAR(50) DEFAULT 'view',
+                    is_accepted BOOLEAN DEFAULT FALSE,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    shared_at TIMESTAMP DEFAULT NOW(),
+                    expires_at TIMESTAMP,
+                    last_accessed TIMESTAMP,
+                    access_count INT DEFAULT 0,
+                    UNIQUE(document_id, shared_with_email)
+                )
+            '''))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_sharing_document ON "{schema_name}".sharing(document_id)'))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_sharing_recipient ON "{schema_name}".sharing(shared_with_email)'))
+
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".sharing_activity (
+                    id SERIAL PRIMARY KEY,
+                    document_id VARCHAR(50) NOT NULL,
+                    file_name VARCHAR(255) NOT NULL,
+                    action VARCHAR(50) NOT NULL,
+                    shared_with_email VARCHAR(255),
+                    shared_via_link VARCHAR(255),
+                    shared_by_email VARCHAR(255) NOT NULL,
+                    ip_address VARCHAR(50),
+                    user_agent VARCHAR(255),
+                    activity_at TIMESTAMP DEFAULT NOW(),
+                    details JSONB
+                )
+            '''))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_activity_document ON "{schema_name}".sharing_activity(document_id)'))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_activity_action ON "{schema_name}".sharing_activity(action)'))
+
+            db.session.execute(text(f'''
+                CREATE TABLE IF NOT EXISTS "{schema_name}".key_exchanges (
+                    id SERIAL PRIMARY KEY,
+                    exchange_id VARCHAR(255) UNIQUE NOT NULL,
+                    sharer_email VARCHAR(255) NOT NULL,
+                    recipient_email VARCHAR(255) NOT NULL,
+                    document_id VARCHAR(50) NOT NULL,
+                    file_name VARCHAR(255) NOT NULL,
+                    sharer_public_key TEXT,
+                    recipient_public_key TEXT,
+                    sharer_fingerprint VARCHAR(64),
+                    recipient_fingerprint VARCHAR(64),
+                    status VARCHAR(50) DEFAULT 'pending',
+                    sharer_verified BOOLEAN DEFAULT FALSE,
+                    recipient_verified BOOLEAN DEFAULT FALSE,
+                    recipient_confirmed BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    expires_at TIMESTAMP,
+                    verified_at TIMESTAMP
+                )
+            '''))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_exchange_id ON "{schema_name}".key_exchanges(exchange_id)'))
+            db.session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_exchange_status ON "{schema_name}".key_exchanges(status)'))
 
             # 4. Create admin user - YOUR EXISTING CODE (unchanged)
             import bcrypt
@@ -2117,55 +2682,67 @@ def tenant_security_baselines(tenant_id):
 #TODO tristan stuff -------------------------------------------------------------------------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    # Clean up any previous failed transactions
+    try:
+        db.session.rollback()
+    except:
+        pass
+    
     form = Loginform()
 
     if request.method == 'POST' and form.validate_on_submit():
         email_input = escape(form.email.data)
         password_input = escape(form.password.data)
 
-        # ✅ Try tenant admin login FIRST (if you have admin users)
-        tenant_admin = authenticate_tenant_admin(email_input, password_input)
-        if tenant_admin:
-            print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
-            session['tenant_id'] = tenant_admin['tenant_id']
-            session['tenant_schema'] = tenant_admin['schema_name']
-            session['user_type'] = 'tenant_admin'
-            session['company_name'] = tenant_admin['company_name']
-            session['email'] = email_input
-            session['temp_user_email'] = email_input
-            session['needs_2fa'] = False  # Disable for now
-
-            # Skip 2FA for debugging
-            flash(f"✅ Admin login successful! tenant_{tenant_admin['tenant_id']}", "success")
-            return redirect(url_for('tenant_dashboard', tenant_id=tenant_admin['tenant_id']))
-
-        # ✅ Try regular user login across all tenants
-        user = find_user_by_email(email_input)
-        print(f"🔍 Found user in tenant: {user['tenant_id'] if user else 'NONE'}")
-
-        if user:
-            # Authenticate user in their tenant
-            authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
-            
-            if authenticated:
-                # ✅ Skip email verification check (no column exists)
-                print(f"✅ User login for {email_input} in tenant {authenticated['tenant_id']}")
-                session['tenant_id'] = authenticated['tenant_id']
-                session['tenant_schema'] = authenticated['schema_name']
-                session['user_id'] = authenticated['user_id']
-                session['user_type'] = 'user'
+        try:
+            # ✅ Try tenant admin login FIRST (if you have admin users)
+            tenant_admin = authenticate_tenant_admin(email_input, password_input)
+            if tenant_admin:
+                print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
+                session['tenant_id'] = tenant_admin['tenant_id']
+                session['tenant_schema'] = tenant_admin['schema_name']
+                session['user_type'] = 'tenant_admin'
+                session['company_name'] = tenant_admin['company_name']
                 session['email'] = email_input
                 session['temp_user_email'] = email_input
-                session['needs_2fa'] = False  # Disable 2FA for now
+                session['needs_2fa'] = False  # Disable for now
 
-                # Direct login without 2FA (your tenant_14.users has no 2FA column)
-                session.permanent = True
-                app.permanent_session_lifetime = timedelta(hours=24)
-                flash(f"✅ Welcome back, {email_input}! (tenant_{authenticated['tenant_id']})", "success")
-                return redirect(url_for('myfiles'))
+                # Skip 2FA for debugging
+                flash(f"✅ Admin login successful! tenant_{tenant_admin['tenant_id']}", "success")
+                return redirect(url_for('tenant_dashboard', tenant_id=tenant_admin['tenant_id']))
 
-        flash("❌ Invalid email or password.", "danger")
-        print(f"❌ Login failed for {email_input}")
+            # ✅ Try regular user login across all tenants
+            user = find_user_by_email(email_input)
+            print(f"🔍 Found user in tenant: {user['tenant_id'] if user else 'NONE'}")
+
+            if user:
+                # Authenticate user in their tenant
+                authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
+                
+                if authenticated:
+                    # ✅ Skip email verification check (no column exists)
+                    print(f"✅ User login for {email_input} in tenant {authenticated['tenant_id']}")
+                    session['tenant_id'] = authenticated['tenant_id']
+                    session['tenant_schema'] = authenticated['schema_name']
+                    session['user_id'] = authenticated['user_id']
+                    session['user_type'] = 'user'
+                    session['email'] = email_input
+                    session['temp_user_email'] = email_input
+                    session['needs_2fa'] = False  # Disable 2FA for now
+
+                    # Direct login without 2FA (your tenant_14.users has no 2FA column)
+                    session.permanent = True
+                    app.permanent_session_lifetime = timedelta(hours=24)
+                    flash(f"✅ Welcome back, {email_input}! (tenant_{authenticated['tenant_id']})", "success")
+                    return redirect(url_for('myfiles'))
+
+            flash("❌ Invalid email or password.", "danger")
+            print(f"❌ Login failed for {email_input}")
+        
+        except Exception as e:
+            db.session.rollback()
+            print(f"❌ Login error: {e}")
+            flash("❌ An error occurred during login. Please try again.", "danger")
 
     return render_template('login/login_page.html', form=form)
 

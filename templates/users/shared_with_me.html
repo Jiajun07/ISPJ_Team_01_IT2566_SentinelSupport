@@ -7,26 +7,22 @@
 
 <div class="myfiles-shell">
     <aside class="side-rail">
-        <!-- Account Switcher -->
+        <!-- Current Account -->
         <div style="padding: 1rem; border-bottom: 1px solid #e0e0e0; margin-bottom: 1rem;">
             <div style="font-size: 0.75rem; color: #666; margin-bottom: 0.5rem;">Current Account:</div>
             <div style="font-weight: 600; margin-bottom: 0.5rem;">{{ account_name }}</div>
-            <select id="account-switcher" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">
-                <option value="1" {% if tenant_id == '1' %}selected{% endif %}>Acme Corp</option>
-                <option value="2" {% if tenant_id == '2' %}selected{% endif %}>Tech Solutions</option>
-            </select>
         </div>
 
         <button type="button" class="upload-btn" id="upload-trigger">Upload File</button>
 
         <nav class="rail-nav">
-            <button class="rail-link" type="button" onclick="window.location.href='/myfiles?tenant={{ tenant_id }}'">
+            <button class="rail-link" type="button" onclick="window.location.href='/myfiles'">
                 <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
                 </svg>
                 My files
             </button>
-            <button class="rail-link active" type="button" onclick="window.location.href='/shared-with-me?tenant={{ tenant_id }}'">
+            <button class="rail-link active" type="button" onclick="window.location.href='/shared-with-me'">
                 <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
                     <circle cx="9" cy="7" r="4"/>
@@ -41,13 +37,13 @@
                 </svg>
                 Recent
             </button>
-            <button class="rail-link" type="button" onclick="window.location.href='/verify-identities?tenant={{ tenant_id }}'">
+            <button class="rail-link" type="button" onclick="window.location.href='/verify-identities'">
                 <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M9 12l2 2 4-4m7 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 Verify Identities
             </button>
-            <button class="rail-link" type="button" onclick="window.location.href='/bin?tenant={{ tenant_id }}'">
+            <button class="rail-link" type="button" onclick="window.location.href='/bin'">
                 <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="3 6 5 6 21 6"/>
                     <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
@@ -172,15 +168,8 @@
 <script>
     const existingFiles = {{ files | tojson | safe }};
     const fileVersions = {};
-    const currentTenant = "{{ tenant_id }}";
     const fileList = document.getElementById("file-list");
     const searchInput = document.getElementById("file-search");
-    const accountSwitcher = document.getElementById("account-switcher");
-
-    // Account switcher
-    accountSwitcher.addEventListener("change", (e) => {
-        window.location.href = `/shared-with-me?tenant=${e.target.value}`;
-    });
 
     const formatSize = (bytes = 0) => {
         if (!bytes) return "-";
@@ -198,15 +187,6 @@
         const modified = file.modified || "-";
         const sensitivity = file.sensitivity || "-";
         const hashText = file.hash ? `SHA256: ${file.hash}` : "Checksum pending";
-        const tenantId = file.owner_tenant_id || (() => {
-            if (!file.url) return currentTenant;
-            try {
-                const url = new URL(file.url, window.location.origin);
-                return url.searchParams.get('tenant') || currentTenant;
-            } catch (e) {
-                return currentTenant;
-            }
-        })();
         const dateShared = file.date_shared || new Date().toISOString().split('T')[0];
 
         row.dataset.search = `${file.name} ${owner} ${sensitivity}`.toLowerCase();
@@ -215,7 +195,7 @@
 
         row.innerHTML = `
             <div class="col name">
-                <a class="file-link" href="/file/${encodeURIComponent(file.name)}?tenant=${tenantId}">${file.name}</a>
+                <a class="file-link" href="/file/${encodeURIComponent(file.name)}">${file.name}</a>
                 <div class="file-subtext">${hashText}</div>
             </div>
             <div class="col">${sensitivity}</div>
@@ -309,7 +289,7 @@
             const newName = prompt("Enter new filename:", currentFileName);
             if (newName && newName !== currentFileName) {
                 try {
-                    const response = await fetch(`/rename?tenant=${currentTenant}`, {
+                    const response = await fetch(`/rename`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ old_name: currentFileName, new_name: newName })
@@ -367,13 +347,13 @@
                 shareToken = shareLink;
             }
 
-            const response = await fetch(`/validate_share_link?share=${encodeURIComponent(shareToken)}&tenant=${currentTenant}`);
+            const response = await fetch(`/validate_share_link?share=${encodeURIComponent(shareToken)}`);
             const data = await response.json();
 
             if (response.ok && data.file) {
                 if (data.file.verification_status === 'pending' || data.file.verification_status === 'exchange_not_found') {
                     alert("Identity verification required. Please verify your identity before accessing this file.");
-                    window.location.href = `/verify-identities?tenant=${currentTenant}`;
+                    window.location.href = `/verify-identities`;
                     return;
                 }
                 // Add the shared file to the list
@@ -444,7 +424,6 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                     share: currentPasswordShareToken,
-                    tenant: currentTenant,
                     password: password
                 })
             });
@@ -454,7 +433,7 @@
                 if (data.file.verification_status === 'pending' || data.file.verification_status === 'exchange_not_found') {
                     hidePasswordModal();
                     alert("Identity verification required. Please verify your identity before accessing this file.");
-                    window.location.href = `/verify-identities?tenant=${currentTenant}`;
+                    window.location.href = `/verify-identities`;
                     return;
                 }
                 // Add the shared file to the list
@@ -511,7 +490,7 @@
                 shareToken = shareLink;
             }
 
-            const response = await fetch(`/validate_share_link?share=${encodeURIComponent(shareToken)}&tenant=${currentTenant}`);
+            const response = await fetch(`/validate_share_link?share=${encodeURIComponent(shareToken)}`);
             const data = await response.json();
 
             if (response.status === 401 && data.requires_password) {
@@ -526,7 +505,7 @@
             if (response.ok && data.file) {
                 if (data.file.verification_status === 'pending' || data.file.verification_status === 'exchange_not_found') {
                     alert("Identity verification required. Please verify your identity before accessing this file.");
-                    window.location.href = `/verify-identities?tenant=${currentTenant}`;
+                    window.location.href = `/verify-identities`;
                     return;
                 }
                 // Add the shared file to the list

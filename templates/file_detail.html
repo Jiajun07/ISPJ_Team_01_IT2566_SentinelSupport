@@ -104,8 +104,8 @@
                                         <div class="hist-col">{{ v.date }}</div>
                                         <div class="hist-col actions">
                                             <button class="action-dots" 
-                                                data-filename="{% if v.is_current %}{{ file.name }}{% else %}{{ v.version_file or (file.name.rsplit('.', 1)[0] + '_v' + v.version|string + '.' + file.name.rsplit('.', 1)[1]) }}{% endif %}" 
-                                                data-download-url="{% if v.is_current %}{{ file.url }}{% else %}{{ url_for('download_version', filename=v.version_file or (file.name.rsplit('.', 1)[0] + '_v' + v.version|string + '.' + file.name.rsplit('.', 1)[1])) }}{% endif %}" 
+                                                data-filename="{% if v.is_current %}{{ file.name }}{% else %}{{ v.name }}{% endif %}" 
+                                                data-download-url="{% if v.is_current %}{{ file.url }}{% else %}{{ url_for('download_version', document_id=v.document_id, version_number=v.version_number) }}{% endif %}" 
                                                 data-is-current="{{ v.is_current }}" 
                                                 data-version="{{ v.version }}">···</button>
                                         </div>

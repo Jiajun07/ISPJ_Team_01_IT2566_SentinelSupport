@@ -97,9 +97,8 @@
 </div>
 
 <script>
-    // Get temp_id and tenant from page
+    // Get temp_id from page
     const tempId = "{{ file.temp_id }}";
-    const currentTenant = "{{ request.args.get('tenant', '1') }}";
     
     // Scan file with DLP on page load
     document.addEventListener('DOMContentLoaded', async () => {
@@ -108,7 +107,7 @@
     
     async function scanFileWithDLP() {
         try {
-            const response = await fetch(`/scan/dlp/${tempId}?tenant=${currentTenant}`);
+            const response = await fetch(`/scan/dlp/${tempId}`);
             const data = await response.json();
             
             if (data.success) {
