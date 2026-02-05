@@ -159,12 +159,40 @@ def restore_backup(tenant_id: int, backup_path: str):
         print(f"❌ Restore failed: {e}")
         return False
 
+def get_user_role(tenant_id: int, email: str):
+    """Get user role from tenant_X.users table"""
+    try:
+        schema_name = f"tenant_{tenant_id}"
+        result = db.session.execute(
+            text(f'SELECT role FROM "{schema_name}".users WHERE email = :email'),
+            {'email': email}
+        )
+        user = result.fetchone()
+        return user[0] if user else 'user'
+    except:
+        return 'user'
+
 
 def get_all_tenants():
-    """Admin dashboard: list active tenants"""
-    return db.session.execute(
-        text("SELECT * FROM tenants WHERE status = 'active' ORDER BY created_at DESC")
-    ).fetchall()
+    """NUCLEAR RESET - Works with Supabase PgBouncer"""
+    try:
+        # 1. Nuclear rollback
+        db.session.rollback()
+
+        # 2. Force new connection
+        conn = db.engine.connect()
+        result = conn.execute(
+            text('SELECT * FROM tenants WHERE status = :status ORDER BY created_at DESC'),
+            {'status': 'active'}
+        )
+        tenants = result.fetchall()
+        conn.close()
+
+        return tenants
+
+    except Exception as e:
+        print(f"❌ get_all_tenants TOTAL FAILURE: {e}")
+        return []  # Empty list = safe fallback
 
 
 def archive_tenant(tenant_id: int):
