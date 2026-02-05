@@ -159,6 +159,19 @@ def restore_backup(tenant_id: int, backup_path: str):
         print(f"❌ Restore failed: {e}")
         return False
 
+def get_user_role(tenant_id: int, email: str):
+    """Get user role from tenant_X.users table"""
+    try:
+        schema_name = f"tenant_{tenant_id}"
+        result = db.session.execute(
+            text(f'SELECT role FROM "{schema_name}".users WHERE email = :email'),
+            {'email': email}
+        )
+        user = result.fetchone()
+        return user[0] if user else 'user'
+    except:
+        return 'user'
+
 
 def get_all_tenants():
     """Admin dashboard: list active tenants"""

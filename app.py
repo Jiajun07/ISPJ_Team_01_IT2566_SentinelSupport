@@ -26,7 +26,7 @@ from sqlalchemy.orm import sessionmaker
 from database import (db, MasterSessionLocal, list_backups, restore_backup, get_last_backup, authenticate_tenant_admin,
                       TenantSecurity, apply_rls_policies, authenticate_user, find_user_by_email, get_verification_code,
                       mark_verification_code_used, validate_signup_code, create_user_in_tenant, create_signup_code,
-                      retention_cleanup, reactivate_tenant, get_tenant_security_status,
+                      retention_cleanup, reactivate_tenant, get_tenant_security_status, get_user_role,
                       store_file_in_db, add_file_version, get_file_from_db, get_all_files_for_tenant, 
                       get_file_versions_from_db, delete_file_from_db, restore_file_from_db, update_file_metadata,
                       create_share_link, get_share_link_by_token, update_share_link_access,
@@ -61,6 +61,12 @@ app.config['SQLALCHEMY_DATABASE_URI'] = (
     "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True,     # Test connections
+    "pool_recycle": 300,       # Recycle every 5 min
+    "pool_size": 5,            # Smaller pool for PgBouncer
+    "max_overflow": 10
+}
 
 # Initialize DB
 db.init_app(app)
@@ -2804,27 +2810,22 @@ def company_signup():
 
 @app.route('/tenant/<int:tenant_id>/dashboard')
 def tenant_dashboard(tenant_id):
-    if session.get('tenant_id') != tenant_id:
-
-        log_tenant_event(
-            action_type='TENANT_DASHBOARD_ACCESS_DENIED',
-            description=f"Unauthorized access attempt to tenant {tenant_id} dashboard",
-            category='SECURITY',
-            success=False,
-            tenant_id=tenant_id
-        )
-
+    # ✅ TYPE-SAFE CHECK
+    print(f"🔍 DEBUG - session['tenant_id']={repr(session.get('tenant_id'))}, route_tenant_id={tenant_id}, match={str(session.get('tenant_id')) == str(tenant_id)}")
+    if str(session.get('tenant_id')) != str(tenant_id):
+        print(f"🚫 ACCESS DENIED: session={session.get('tenant_id')} != route={tenant_id}")
         return redirect(url_for('login'))
 
-    tenant = Tenant.query.get_or_404(tenant_id)  # ✅ Get tenant object
+    print(f"✅ DASHBOARD OK: tenant_{tenant_id}")
+    tenant = Tenant.query.get_or_404(tenant_id)
     stats = get_tenant_stats(tenant_id)
-    security_status = get_tenant_security_status(tenant_id)  # ✅ NEW
+    security_status = get_tenant_security_status(tenant_id)
 
     return render_template('CompanyAdmin/dashboard.html',
-                           tenant=tenant,  # ✅ Pass tenant
+                           tenant=tenant,
                            tenant_id=tenant_id,
                            stats=stats,
-                           security_status=security_status,  # ✅ Pass security
+                           security_status=security_status,
                            company_name=tenant.company_name,
                            onboarding_date=tenant.created_at.strftime('%d/%m/%Y') if tenant.created_at else 'N/A')
 
@@ -2927,8 +2928,7 @@ def backup_tenant(tenant_id: int):
 
 @app.route('/tenant/<int:tenant_id>/security-baselines', methods=['GET', 'POST'])
 def tenant_security_baselines(tenant_id):
-    if session.get('tenant_id') != tenant_id:
-
+    if str(session.get('tenant_id')) != str(tenant_id):
         log_tenant_event(
             action_type='SECURITY_BASELINES_ACCESS_DENIED',
             description=f"Unauthorized access to security baselines for tenant {tenant_id}",
@@ -2936,14 +2936,12 @@ def tenant_security_baselines(tenant_id):
             success=False,
             tenant_id=tenant_id
         )
-
         return redirect(url_for('login'))
 
     tenant_security = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
     form = SecurityBaselineForm(obj=tenant_security)
 
     if form.validate_on_submit():
-
         log_tenant_event(
             action_type='SECURITY_BASELINES_UPDATE_ATTEMPT',
             description=f"Security baselines update attempt for tenant {tenant_id}",
@@ -2956,12 +2954,10 @@ def tenant_security_baselines(tenant_id):
         if not tenant_security:
             tenant_security = TenantSecurity(tenant_id=tenant_id)
 
-        # Update settings
         form.populate_obj(tenant_security)
         db.session.add(tenant_security)
         db.session.commit()
 
-        # ✅ APPLY RLS POLICIES TO TENANT SCHEMA
         apply_rls_policies(tenant_id, tenant_security)
 
         log_tenant_event(
@@ -2974,7 +2970,7 @@ def tenant_security_baselines(tenant_id):
             additional_data={
                 'mfa_enabled': tenant_security.mfa_enabled,
                 'dlp_enabled': tenant_security.dlp_enabled,
-                'rls_enabled': tenant_security.enable_rls
+                'rls_enabled': tenant_security.rls_enabled  # ✅ FIXED!
             }
         )
 
@@ -2999,77 +2995,76 @@ def login():
         email_input = escape(form.email.data)
         password_input = escape(form.password.data)
 
-        try:
-            # ✅ Try tenant admin login FIRST (if you have admin users)
-            tenant_admin = authenticate_tenant_admin(email_input, password_input)
-            if tenant_admin:
-                log_tenant_event(
-                    action_type='TENANT_ADMIN_LOGIN_SUCCESS',
-                    description=f"Tenant admin login successful for {email_input} (tenant_{tenant_admin['tenant_id']})",
-                    category='USER_ACTIVITY',
-                    tenant_id=tenant_admin['tenant_id']
-                )
+        print(f"🔍 Login attempt: {email_input}")
 
-                print(f"✅ Admin login for tenant {tenant_admin['tenant_id']}")
-                session['tenant_id'] = tenant_admin['tenant_id']
-                session['tenant_schema'] = tenant_admin['schema_name']
-                session['user_type'] = 'tenant_admin'
-                session['company_name'] = tenant_admin['company_name']
-                session['email'] = email_input
-                session['temp_user_email'] = email_input
-                session['needs_2fa'] = False  # Disable for now
+        # ✅ PATH 1: TENANT ADMIN (public.tenants table)
+        tenant_admin = authenticate_tenant_admin(email_input, password_input)
+        if tenant_admin:
+            print(f"✅ TENANT ADMIN LOGIN: tenant_{tenant_admin['tenant_id']}")
 
-                # Skip 2FA for debugging
-                flash(f"✅ Admin login successful! tenant_{tenant_admin['tenant_id']}", "success")
-                return redirect(url_for('tenant_dashboard', tenant_id=tenant_admin['tenant_id']))
-
-            # ✅ Try regular user login across all tenants
-            user = find_user_by_email(email_input)
-            print(f"🔍 Found user in tenant: {user['tenant_id'] if user else 'NONE'}")
-
-            if user:
-                # Authenticate user in their tenant
-                authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
-                
-                if authenticated:
-                    log_tenant_event(
-                        action_type='USER_LOGIN_SUCCESS',
-                        description=f"User login successful for {email_input} (tenant_{authenticated['tenant_id']})",
-                        category='USER_ACTIVITY',
-                        tenant_id=authenticated['tenant_id']
-                    )
-
-                    # ✅ Skip email verification check (no column exists)
-                    print(f"✅ User login for {email_input} in tenant {authenticated['tenant_id']}")
-                    session['tenant_id'] = authenticated['tenant_id']
-                    session['tenant_schema'] = authenticated['schema_name']
-                    session['user_id'] = authenticated['user_id']
-                    session['user_type'] = 'user'
-                    session['email'] = email_input
-                    session['temp_user_email'] = email_input
-                    session['needs_2fa'] = False  # Disable 2FA for now
-
-                    # Direct login without 2FA (your tenant_14.users has no 2FA column)
-                    session.permanent = True
-                    app.permanent_session_lifetime = timedelta(hours=24)
-                    flash(f"✅ Welcome back, {email_input}! (tenant_{authenticated['tenant_id']})", "success")
-                    return redirect(url_for('myfiles'))
+            session['tenant_id'] = int(tenant_admin['tenant_id'])
+            session['tenant_schema'] = tenant_admin['schema_name']
+            session['user_type'] = 'tenant_admin'
+            session['company_name'] = tenant_admin['company_name']
+            session['email'] = email_input
+            session.modified = True
 
             log_tenant_event(
-                action_type='LOGIN_FAILED',
-                description=f"Login failed for email: {email_input}",
+                action_type='TENANT_ADMIN_LOGIN_SUCCESS',
+                description=f"Tenant admin login: {email_input}",
                 category='USER_ACTIVITY',
-                success=False,
-                tenant_id=None
+                tenant_id=tenant_admin['tenant_id']
             )
 
-            flash("❌ Invalid email or password.", "danger")
-            print(f"❌ Login failed for {email_input}")
-        
-        except Exception as e:
-            db.session.rollback()
-            print(f"❌ Login error: {e}")
-            flash("❌ An error occurred during login. Please try again.", "danger")
+            flash(f"✅ Admin login! tenant_{tenant_admin['tenant_id']}", "success")
+            return redirect(url_for('tenant_dashboard', tenant_id=tenant_admin['tenant_id']))
+
+        # ✅ PATH 2: REGULAR USER (tenant_X.users tables) - ROLE AWARE
+        print(f"🔍 Trying user login: {email_input}")
+        user = find_user_by_email(email_input)
+
+        if user:
+            print(f"🔍 Found user in tenant: {user['tenant_id']}")
+            authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
+
+            if authenticated:
+                # ✅ CHECK ROLE FROM tenant_X.users table!
+                user_role = get_user_role(authenticated['tenant_id'], email_input)
+                print(f"🔍 User role: '{user_role}' in tenant_{authenticated['tenant_id']}")
+
+                # Set session
+                session['tenant_id'] = int(authenticated['tenant_id'])
+                session['tenant_schema'] = authenticated['schema_name']
+                session['user_id'] = authenticated['user_id']
+                session['user_type'] = 'tenant_admin' if user_role == 'admin' else 'user'
+                session['email'] = email_input
+                session.permanent = True
+                session.modified = True
+
+                log_tenant_event(
+                    action_type='USER_LOGIN_SUCCESS',
+                    description=f"User login: {email_input} (role: {user_role})",
+                    category='USER_ACTIVITY',
+                    tenant_id=authenticated['tenant_id']
+                )
+
+                # ✅ ROLE-BASED REDIRECT
+                if user_role == 'admin':
+                    flash(f"✅ Admin access granted! tenant_{authenticated['tenant_id']}", "success")
+                    return redirect(url_for('tenant_dashboard', tenant_id=authenticated['tenant_id']))
+                else:
+                    flash(f"✅ Welcome, {email_input}! tenant_{authenticated['tenant_id']}", "success")
+                    return redirect(url_for('myfiles'))
+
+        # ✅ LOGIN FAILED
+        log_tenant_event(
+            action_type='LOGIN_FAILED',
+            description=f"Login failed: {email_input}",
+            category='USER_ACTIVITY',
+            success=False
+        )
+        flash("❌ Invalid email or password.", "danger")
+        print(f"❌ Login failed: {email_input}")
 
     return render_template('login/login_page.html', form=form)
 
