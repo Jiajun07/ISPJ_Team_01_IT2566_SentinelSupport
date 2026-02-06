@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+{% block title %}Compliance Dashboard{% endblock %}
+
+{% block content %}
+
+<script>
+    function maskEmail(email) {
+        if (!email || !email.includes('@')) return email;
+        const [local, domain] = email.split('@');
+        const maskedLocal = local.length > 2 ?
+            local[0] + '*'.repeat(local.length - 2) + local[local.length - 1] :
+            '*'.repeat(local.length);
+        const maskedDomain = domain[0] + '*'.repeat(domain.length - 1);
+        return maskedLocal + '@' + maskedDomain;
+    }
+
+    function maskIP(ip) {
+        if (!ip || !ip.match(/\d+\.\d+\.\d+\.\d+/)) return ip;
+        const parts = ip.split('.');
+        return parts[0] + '.' + parts[1] + '.***.***.***';
+    }
+
+    function maskHash(hash) {
+        if (!hash || hash.length < 8) return hash;
+        return hash.substring(0, 8) + '*'.repeat(hash.length - 8);
+    }
+</script>
+
+<div class="container mt-4">
+    <div class="d-flex align-items-center w-100">
+        <div>
+            <h2 class="mb-1">Compliance Dashboard</h2>
+            <p class="text-muted mb-0">{{ scope }} - Role: {{ user_role }}</p>
+        </div>
+        {% if session.user_type in ['tenant_admin'] %}
+        <div class="ms-auto">
+            <a href="{{ url_for('tenant_dashboard', tenant_id=session.tenant_id) }}" class="btn btn-primary btn-lg"
+                id="backButton">
+                <i class="fas fa-arrow-left me-2"></i>
+                Back to Dashboard
+            </a>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="stats-container mb-4">
+        <div class="stats-card-item">
+            <div class="card stats-card bg-primary text-white">
+                <div class="card-body">
+                    <h5>Total Events</h5>
+                    <h3>{{ summary.total_events }}</h3>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-card-item">
+            <div class="card stats-card bg-success text-white">
+                <div class="card-body">
+                    <h5>Successful Logins</h5>
+                    <h3>{{ summary.successful_logins }}</h3>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-card-item">
+            <div class="card stats-card bg-warning text-white">
+                <div class="card-body">
+                    <h5>Failed Logins</h5>
+                    <h3>{{ summary.failed_logins }}</h3>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-card-item">
+            <div class="card stats-card bg-danger text-white">
+                <div class="card-body">
+                    <h5>High Risk Events</h5>
+                    <h3>{{ summary.high_risk_events }}</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export Options -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Export Compliance Data</h5>
+                </div>
+                <div class="card-body">
+                    <form id="exportForm" class="row g-3">
+                        <div class="col-md-4">
+                            <label for="start_date" class="form-label">Start Date</label>
+                            <input type="date" class="form-control" id="start_date" name="start_date" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="end_date" class="form-label">End Date</label>
+                            <input type="date" class="form-control" id="end_date" name="end_date" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Export Format</label><br>
+                            <button type="button" class="btn btn-primary me-2" onclick="exportData('csv')">CSV</button>
+                            <button type="button" class="btn btn-success me-2"
+                                onclick="exportData('json')">JSON</button>
+                            <button type="button" class="btn btn-danger" onclick="exportData('pdf')">PDF</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Audit Logs -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Recent Audit Logs (Last 50)</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Actor</th>
+                                    <th>Action</th>
+                                    <th>Resource</th>
+                                    <th>Result</th>
+                                    <th>Severity</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for log in logs %}
+                                <tr>
+                                    <td>{{ log.timestamp }}</td>
+                                    <td>
+                                        <span class="masked-email">{{ log.actor_email }}</span>
+                                    </td>
+                                    <td>{{ log.action }}</td>
+                                    <td>{{ log.resource_type }}</td>
+                                    <td>
+                                        <span class="badge bg-{{ 'success' if log.result == 'SUCCESS' else 'danger' }}">
+                                            {{ log.result }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span
+                                            class="badge bg-{{ 'danger' if log.severity == 'HIGH' else 'warning' if log.severity == 'MEDIUM' else 'secondary' }}">
+                                            {{ log.severity }}
+                                        </span>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Set default dates (last 30 days)
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
+
+    document.getElementById('end_date').value = today.toISOString().split('T')[0];
+    document.getElementById('start_date').value = thirtyDaysAgo.toISOString().split('T')[0];
+
+    function exportData(format) {
+        const startDate = document.getElementById('start_date').value;
+        const endDate = document.getElementById('end_date').value;
+
+        if (!startDate || !endDate) {
+            alert('Please select start and end dates');
+            return;
+        }
+
+        const url = `/export/export/compliance/${format}?start_date=${startDate}&end_date=${endDate}`;
+        window.open(url, '_blank');
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.masked-email').forEach(function (el) {
+            el.textContent = maskEmail(el.textContent);
+        });
+
+        document.querySelectorAll('.masked-ip').forEach(function (el) {
+            el.textContent = maskIP(el.textContent);
+        });
+
+        document.querySelectorAll('.masked-hash').forEach(function (el) {
+            el.textContent = maskHash(el.textContent);
+        });
+    });
+</script>
+
+<style>
+    #backButton {
+        display: flex;
+        justify-content: flex-end;
+        text-decoration: unset;
+        padding: 10px;
+    }
+
+    .masked-data {
+        font-family: monospace;
+        background-color: #f8f9fa;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-size: 0.9em;
+    }
+
+    .masked-email::after {
+        content: " 🔒";
+        font-size: 0.8em;
+        opacity: 0.5;
+    }
+
+    .sensitive-info {
+        position: relative;
+    }
+
+    .sensitive-info:hover::after {
+        content: "Masked for privacy";
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #333;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        white-space: nowrap;
+        z-index: 1000;
+    }
+
+    .stats-container {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 2rem;
+    }
+
+    .stats-card-item {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .stats-card {
+        width: 100%;
+        height: 100%;
+    }
+</style>
+{% endblock %}

@@ -1,5 +1,66 @@
 {% extends "base.html" %}
 {% block content %}
+
+
+<script>
+    function maskEmail(email) {
+        if (!email || email === 'Unknown User' || !email.includes('@')) return email;
+        const [local, domain] = email.split('@');
+        const maskedLocal = local.length > 2 ?
+            local[0] + '*'.repeat(local.length - 2) + local[local.length - 1] :
+            '*'.repeat(local.length);
+        const domainParts = domain.split('.');
+        const maskedDomain = domainParts[0][0] + '*'.repeat(domainParts[0].length - 1);
+        return maskedLocal + '@' + maskedDomain + (domainParts.length > 1 ? '.' + domainParts.slice(1).join('.') : '');
+    }
+
+    function maskEmailsInText(text) {
+        if (!text) return text;
+
+        const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
+
+        return text.replace(emailRegex, function (email) {
+            return maskEmail(email);
+        });
+    }
+
+    function maskIP(ip) {
+        if (!ip || ip === '-' || !ip.match(/^\d+\.\d+\.\d+\.\d+$/)) return ip;
+        const parts = ip.split('.');
+        return parts[0] + '.' + parts[1] + '.***.***.***';
+    }
+
+    function maskUserID(id) {
+        if (!id || id === 'N/A') return id;
+        const idStr = String(id);
+        if (idStr.length <= 2) return '*'.repeat(idStr.length);
+        return idStr[0] + '*'.repeat(idStr.length - 2) + idStr[idStr.length - 1];
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.masked-email').forEach(function (el) {
+            el.textContent = maskEmail(el.textContent);
+        });
+
+        document.querySelectorAll('.masked-ip').forEach(function (el) {
+            el.textContent = maskIP(el.textContent);
+        });
+
+        document.querySelectorAll('.masked-user-id').forEach(function (el) {
+            el.textContent = maskUserID(el.textContent);
+        });
+        document.querySelectorAll('.description-text').forEach(function (el) {
+            el.textContent = maskEmailsInText(el.textContent);
+        });
+
+        document.querySelectorAll('.masked-resource-id').forEach(function (el) {
+            if (el.textContent && el.textContent.length > 10) {
+                el.textContent = el.textContent.substring(0, 6) + '***' + el.textContent.slice(-3);
+            }
+        });
+    });
+</script>
+
 <div class="container-fluid mt-4 px-0">
     <div class="row g-0">
         <div class="col-12">
@@ -9,6 +70,14 @@
                     <i class="fas fa-building text-primary me-2"></i>Tenant Audit Logs
                     <small class="text-muted">- {{ tenant_name or 'Unknown Tenant' }}</small>
                 </h2>
+            </div>
+
+            <div class="ms-auto">
+                <a href="{{ url_for('tenant_dashboard', tenant_id=session.tenant_id) }}" class="btn btn-primary btn-lg"
+                    id="backButton">
+                    <i class="fas fa-arrow-left me-2"></i>
+                    Back to Dashboard
+                </a>
             </div>
 
             <!-- Statistics Cards -->
@@ -89,7 +158,8 @@
                                 <option value="">All Categories</option>
                                 {% if categories %}
                                 {% for category in categories.values() %}
-                                <option value="{{ category }}" {% if request.args.get('category')==category %}selected{% endif %}>
+                                <option value="{{ category }}" {% if request.args.get('category')==category %}selected{%
+                                    endif %}>
                                     {{ category.replace('_', ' ').title() }}
                                 </option>
                                 {% endfor %}
@@ -120,12 +190,18 @@
                         <table class="table table-hover mb-0 w-100">
                             <thead class="bg-light">
                                 <tr>
-                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 140px;">Timestamp</th>
-                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 180px;">User</th>
-                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 200px;">Action</th>
-                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="width: 35%;">Details</th>
-                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 120px;">IP Address</th>
-                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 100px;">Status</th>
+                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 140px;">
+                                        Timestamp</th>
+                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 180px;">User
+                                    </th>
+                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 200px;">
+                                        Action</th>
+                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="width: 35%;">Details
+                                    </th>
+                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 120px;">IP
+                                        Address</th>
+                                    <th class="border-0 px-4 py-3 text-muted fw-semibold" style="min-width: 100px;">
+                                        Status</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -142,10 +218,10 @@
                                     </td>
                                     <td class="px-4 py-3">
                                         <div class="text-dark fw-medium">
-                                            {{ log.user_email or 'Unknown User' }}
+                                            <span class="masked-email">{{ log.user_email or 'Unknown User' }}</span>
                                         </div>
                                         <small class="text-muted">
-                                            ID: {{ log.user_id or 'N/A' }}
+                                            ID: <span class="masked-user-id">{{ log.user_id or 'N/A' }}</span>
                                         </small>
                                     </td>
                                     <td class="px-4 py-3">
@@ -176,7 +252,9 @@
                                             </span>
                                             {% endif %}
                                             <div>
-                                                <div class="text-dark fw-medium text-truncate" style="max-width: 150px;">{{ log.action_type.replace('_', ' ').title() if log.action_type else '' }}</div>
+                                                <div class="text-dark fw-medium text-truncate"
+                                                    style="max-width: 150px;">{{ log.action_type.replace('_', '
+                                                    ').title() if log.action_type else '' }}</div>
                                                 {% if log.target_resource %}
                                                 <small class="text-muted">Resource: {{ log.target_resource }}</small>
                                                 {% endif %}
@@ -184,16 +262,19 @@
                                         </div>
                                     </td>
                                     <td class="px-4 py-3">
-                                        <div class="text-dark">
-                                            {{ log.action_description[:80] if log.action_description else '' }}{% if log.action_description and log.action_description|length > 80 %}...{% endif %}
+                                        <div class="text-dark description-text">
+                                            {{ log.action_description[:80] if log.action_description else '' }}{% if
+                                            log.action_description and log.action_description|length > 80 %}...{% endif
+                                            %}
                                         </div>
                                         {% if log.resource_id %}
-                                        <small class="text-muted">{{ log.resource_id }}</small>
+                                        <small class="text-muted masked-resource-id">{{ log.resource_id }}</small>
                                         {% endif %}
                                     </td>
                                     <td class="px-4 py-3">
-                                        <span class="text-dark fw-medium">{{ log.ip_address or '-' }}</span>
+                                        <span class="text-dark fw-medium masked-ip">{{ log.ip_address or '-' }}</span>
                                     </td>
+
                                     <td class="px-4 py-3">
                                         {% if log.success %}
                                         <span class="badge bg-success bg-opacity-10 text-success">
@@ -232,352 +313,405 @@
                     <div class="d-flex justify-content-between align-items-center p-4 border-top">
                         <div class="text-muted">
                             Showing {{ ((current_page - 1) * per_page) + 1 }} to
-                            {{ current_page * per_page if current_page * per_page < total_count else total_count }} of {{ total_count }} entries
+                            {{ current_page * per_page if current_page * per_page < total_count else total_count }} of
+                                {{ total_count }} entries </div>
+                                <nav>
+                                    <ul class="pagination pagination-sm mb-0">
+                                        {% if current_page > 1 %}
+                                        <li class="page-item">
+                                            <a class="page-link"
+                                                href="?page={{ current_page - 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
+                                                <i class="fas fa-chevron-left"></i>
+                                            </a>
+                                        </li>
+                                        {% endif %}
+
+                                        {% set start_page = [current_page - 2, 1]|max %}
+                                        {% set end_page = [current_page + 2, (total_count / per_page)|round(0,
+                                        'ceil')|int]|min %}
+
+                                        {% for page_num in range(start_page, end_page + 1) %}
+                                        <li class="page-item {% if page_num == current_page %}active{% endif %}">
+                                            <a class="page-link"
+                                                href="?page={{ page_num }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
+                                                {{ page_num }}
+                                            </a>
+                                        </li>
+                                        {% endfor %}
+
+                                        {% if has_more %}
+                                        <li class="page-item">
+                                            <a class="page-link"
+                                                href="?page={{ current_page + 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
+                                                <i class="fas fa-chevron-right"></i>
+                                            </a>
+                                        </li>
+                                        {% endif %}
+                                    </ul>
+                                </nav>
                         </div>
-                        <nav>
-                            <ul class="pagination pagination-sm mb-0">
-                                {% if current_page > 1 %}
-                                <li class="page-item">
-                                    <a class="page-link"
-                                        href="?page={{ current_page - 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                        <i class="fas fa-chevron-left"></i>
-                                    </a>
-                                </li>
-                                {% endif %}
-
-                                {% set start_page = [current_page - 2, 1]|max %}
-                                {% set end_page = [current_page + 2, (total_count / per_page)|round(0, 'ceil')|int]|min %}
-
-                                {% for page_num in range(start_page, end_page + 1) %}
-                                <li class="page-item {% if page_num == current_page %}active{% endif %}">
-                                    <a class="page-link"
-                                        href="?page={{ page_num }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                        {{ page_num }}
-                                    </a>
-                                </li>
-                                {% endfor %}
-
-                                {% if has_more %}
-                                <li class="page-item">
-                                    <a class="page-link"
-                                        href="?page={{ current_page + 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                        <i class="fas fa-chevron-right"></i>
-                                    </a>
-                                </li>
-                                {% endif %}
-                            </ul>
-                        </nav>
+                        {% endif %}
                     </div>
-                    {% endif %}
                 </div>
             </div>
         </div>
     </div>
-</div>
 
-<style>
-/* Full Width Table Styles */
-.full-width-table {
-    width: 100%;
-    overflow-x: auto;
-}
+    <style>
+        #backButton {
+            display: flex;
+            justify-content: flex-end;
+            text-decoration: unset;
+            padding: 10px;
+        }
 
-.full-width-table .table {
-    width: 100% !important;
-    min-width: 100%;
-    table-layout: auto;
-}
+        .masked-data {
+            font-family: monospace;
+            background-color: #f8f9fa;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
 
-/* Container adjustments for full width */
-.container-fluid.px-0 {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-}
+        .masked-email::after {
+            content: " 🔒";
+            font-size: 0.8em;
+            opacity: 0.5;
+        }
 
-.row.g-0 {
-    --bs-gutter-x: 0;
-    --bs-gutter-y: 0;
-}
+        .sensitive-info {
+            position: relative;
+        }
 
-/* Spacing for content inside full width */
-.px-4 {
-    padding-left: 1.5rem !important;
-    padding-right: 1.5rem !important;
-}
+        .sensitive-info:hover::after {
+            content: "Masked for privacy";
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+            z-index: 1000;
+        }
 
-.mx-4 {
-    margin-left: 1.5rem !important;
-    margin-right: 1.5rem !important;
-}
+        /* Full Width Table Styles */
+        .full-width-table {
+            width: 100%;
+            overflow-x: auto;
+        }
 
-/* ✅ WORKING: Stats Cards Layout - Pure Flexbox with 20px gaps */
+        .full-width-table .table {
+            width: 100% !important;
+            min-width: 100%;
+            table-layout: auto;
+        }
 
-.stats-container {
-    display: flex;
-    gap: 20px; /* Exactly 20px gap between cards */
-    margin-bottom: 2rem;
-}
+        /* Container adjustments for full width */
+        .container-fluid.px-0 {
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }
 
-.stats-card-item {
-    flex: 1; /* Each card takes equal space */
-    min-width: 0; /* Allow shrinking */
-}
+        .row.g-0 {
+            --bs-gutter-x: 0;
+            --bs-gutter-y: 0;
+        }
 
-.stats-card {
-    border-radius: 12px;
-    transition: all 0.3s ease;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    min-height: 120px;
-    width: 100%;
-    height: 100%;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
+        /* Spacing for content inside full width */
+        .px-4 {
+            padding-left: 1.5rem !important;
+            padding-right: 1.5rem !important;
+        }
 
-.stats-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15) !important;
-}
+        .mx-4 {
+            margin-left: 1.5rem !important;
+            margin-right: 1.5rem !important;
+        }
 
-.stats-card .card-body {
-    padding: 1.5rem;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
+        /* ✅ WORKING: Stats Cards Layout - Pure Flexbox with 20px gaps */
 
-.stats-info {
-    flex: 1;
-}
+        .stats-container {
+            display: flex;
+            gap: 20px;
+            /* Exactly 20px gap between cards */
+            margin-bottom: 2rem;
+        }
 
-.stats-number {
-    font-size: 2rem;
-    color: #2c3e50;
-    margin-bottom: 0.25rem;
-    font-weight: 700;
-}
+        .stats-card-item {
+            flex: 1;
+            /* Each card takes equal space */
+            min-width: 0;
+            /* Allow shrinking */
+        }
 
-.stats-label {
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: #6c757d;
-    margin-bottom: 0;
-}
+        .stats-card {
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            min-height: 120px;
+            width: 100%;
+            height: 100%;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
 
-.stats-icon {
-    width: 60px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    border-radius: 50%;
-}
+        .stats-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15) !important;
+        }
 
-.stats-icon i {
-    font-size: 1.5rem;
-}
+        .stats-card .card-body {
+            padding: 1.5rem;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
 
-/* ✅ Responsive Design */
-@media (max-width: 1200px) {
-    .full-width-table .table td,
-    .full-width-table .table th {
-        padding: 12px 8px;
-        font-size: 14px;
-    }
-    
-    .stats-number {
-        font-size: 1.8rem;
-    }
-    
-    .stats-label {
-        font-size: 0.85rem;
-    }
-    
-    .stats-container {
-        gap: 15px; /* Slightly smaller gap on large tablets */
-    }
-}
+        .stats-info {
+            flex: 1;
+        }
 
-@media (max-width: 992px) {
-    .stats-container {
-        flex-wrap: wrap; /* Allow wrapping on tablets */
-        gap: 15px;
-    }
-    
-    .stats-card-item {
-        flex: 0 0 calc(50% - 7.5px); /* 2 cards per row */
-    }
-    
-    .stats-number {
-        font-size: 1.7rem;
-    }
-}
+        .stats-number {
+            font-size: 2rem;
+            color: #2c3e50;
+            margin-bottom: 0.25rem;
+            font-weight: 700;
+        }
 
-@media (max-width: 768px) {
-    .full-width-table .table td,
-    .full-width-table .table th {
-        padding: 8px 6px;
-        font-size: 13px;
-    }
-    
-    .full-width-table {
-        overflow-x: scroll;
-    }
-    
-    .text-truncate {
-        max-width: 100px !important;
-    }
-    
-    .stats-container {
-        flex-direction: row;   
-        flex-wrap: nowrap;     
-        overflow-x: auto;      
-    }
-    
-    .stats-card-item {
-        flex: none; /* Reset flex for mobile */
-        width: 100%;
-    }
-    
-    .stats-number {
-        font-size: 1.6rem;
-    }
-    
-    .stats-card .card-body {
-        padding: 1.25rem;
-    }
-}
+        .stats-label {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #6c757d;
+            margin-bottom: 0;
+        }
 
-@media (max-width: 576px) {
-    .px-4 {
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-    }
-    
-    .mx-4 {
-        margin-left: 1rem !important;
-        margin-right: 1rem !important;
-    }
-    
-    .stats-number {
-        font-size: 1.5rem;
-    }
-    
-    .stats-card .card-body {
-        padding: 1rem;
-    }
-}
+        .stats-icon {
+            width: 60px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            border-radius: 50%;
+        }
 
-/* Enhanced Form Styling */
-.custom-input, .custom-select {
-    border: 2px solid #e9ecef;
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 14px;
-    transition: all 0.3s ease;
-    background-color: #ffffff;
-}
+        .stats-icon i {
+            font-size: 1.5rem;
+        }
 
-.custom-input:focus, .custom-select:focus {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.15);
-    background-color: #ffffff;
-    outline: none;
-}
+        /* ✅ Responsive Design */
+        @media (max-width: 1200px) {
 
-.custom-input:hover, .custom-select:hover {
-    border-color: #6c757d;
-}
+            .full-width-table .table td,
+            .full-width-table .table th {
+                padding: 12px 8px;
+                font-size: 14px;
+            }
 
-.custom-btn {
-    border-radius: 8px;
-    padding: 10px 20px;
-    font-weight: 500;
-    transition: all 0.3s ease;
-    border: 2px solid transparent;
-    min-height: 44px;
-}
+            .stats-number {
+                font-size: 1.8rem;
+            }
 
-.custom-btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-}
+            .stats-label {
+                font-size: 0.85rem;
+            }
 
-.btn-primary.custom-btn {
-    background: linear-gradient(45deg, #0d6efd, #0056b3);
-    border-color: #0d6efd;
-}
+            .stats-container {
+                gap: 15px;
+                /* Slightly smaller gap on large tablets */
+            }
+        }
 
-.btn-outline-secondary.custom-btn {
-    border-color: #6c757d;
-    color: #6c757d;
-}
+        @media (max-width: 992px) {
+            .stats-container {
+                flex-wrap: wrap;
+                /* Allow wrapping on tablets */
+                gap: 15px;
+            }
 
-.btn-outline-secondary.custom-btn:hover {
-    background-color: #6c757d;
-    border-color: #6c757d;
-    color: white;
-}
+            .stats-card-item {
+                flex: 0 0 calc(50% - 7.5px);
+                /* 2 cards per row */
+            }
 
-/* Table Styling */
-.table-hover tbody tr:hover {
-    background-color: rgba(0, 123, 255, 0.05);
-    transition: background-color 0.2s ease;
-}
+            .stats-number {
+                font-size: 1.7rem;
+            }
+        }
 
-.badge {
-    border-radius: 8px;
-    font-size: 0.75em;
-    padding: 6px 10px;
-    font-weight: 500;
-}
+        @media (max-width: 768px) {
 
-.card {
-    border-radius: 12px;
-    transition: box-shadow 0.3s ease;
-}
+            .full-width-table .table td,
+            .full-width-table .table th {
+                padding: 8px 6px;
+                font-size: 13px;
+            }
 
-.table td {
-    vertical-align: middle;
-    border-color: #f8f9fa;
-    padding: 16px;
-}
+            .full-width-table {
+                overflow-x: scroll;
+            }
 
-.table th {
-    padding: 16px;
-    background-color: #f8f9fa !important;
-}
+            .text-truncate {
+                max-width: 100px !important;
+            }
 
-/* Pagination Styling */
-.pagination .page-link {
-    border: none;
-    color: #6c757d;
-    padding: 0.6rem 0.9rem;
-    border-radius: 6px;
-    margin: 0 2px;
-    transition: all 0.2s ease;
-}
+            .stats-container {
+                flex-direction: row;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+            }
 
-.pagination .page-item.active .page-link {
-    background: linear-gradient(45deg, #0d6efd, #0056b3);
-    border-color: #0d6efd;
-    box-shadow: 0 2px 4px rgba(13, 110, 253, 0.3);
-}
+            .stats-card-item {
+                flex: none;
+                /* Reset flex for mobile */
+                width: 100%;
+            }
 
-.pagination .page-link:hover {
-    background-color: #e9ecef;
-    color: #0d6efd;
-    transform: translateY(-1px);
-}
+            .stats-number {
+                font-size: 1.6rem;
+            }
 
-/* Empty State Styling */
-.text-center .fas.fa-inbox {
-    color: #dee2e6;
-}
+            .stats-card .card-body {
+                padding: 1.25rem;
+            }
+        }
 
-#formdata {
-    margin-bottom: 20px !important;
-}
-</style>
-{% endblock %}
+        @media (max-width: 576px) {
+            .px-4 {
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+            }
+
+            .mx-4 {
+                margin-left: 1rem !important;
+                margin-right: 1rem !important;
+            }
+
+            .stats-number {
+                font-size: 1.5rem;
+            }
+
+            .stats-card .card-body {
+                padding: 1rem;
+            }
+        }
+
+        /* Enhanced Form Styling */
+        .custom-input,
+        .custom-select {
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            background-color: #ffffff;
+        }
+
+        .custom-input:focus,
+        .custom-select:focus {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.15);
+            background-color: #ffffff;
+            outline: none;
+        }
+
+        .custom-input:hover,
+        .custom-select:hover {
+            border-color: #6c757d;
+        }
+
+        .custom-btn {
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+            min-height: 44px;
+        }
+
+        .custom-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary.custom-btn {
+            background: linear-gradient(45deg, #0d6efd, #0056b3);
+            border-color: #0d6efd;
+        }
+
+        .btn-outline-secondary.custom-btn {
+            border-color: #6c757d;
+            color: #6c757d;
+        }
+
+        .btn-outline-secondary.custom-btn:hover {
+            background-color: #6c757d;
+            border-color: #6c757d;
+            color: white;
+        }
+
+        /* Table Styling */
+        .table-hover tbody tr:hover {
+            background-color: rgba(0, 123, 255, 0.05);
+            transition: background-color 0.2s ease;
+        }
+
+        .badge {
+            border-radius: 8px;
+            font-size: 0.75em;
+            padding: 6px 10px;
+            font-weight: 500;
+        }
+
+        .card {
+            border-radius: 12px;
+            transition: box-shadow 0.3s ease;
+        }
+
+        .table td {
+            vertical-align: middle;
+            border-color: #f8f9fa;
+            padding: 16px;
+        }
+
+        .table th {
+            padding: 16px;
+            background-color: #f8f9fa !important;
+        }
+
+        /* Pagination Styling */
+        .pagination .page-link {
+            border: none;
+            color: #6c757d;
+            padding: 0.6rem 0.9rem;
+            border-radius: 6px;
+            margin: 0 2px;
+            transition: all 0.2s ease;
+        }
+
+        .pagination .page-item.active .page-link {
+            background: linear-gradient(45deg, #0d6efd, #0056b3);
+            border-color: #0d6efd;
+            box-shadow: 0 2px 4px rgba(13, 110, 253, 0.3);
+        }
+
+        .pagination .page-link:hover {
+            background-color: #e9ecef;
+            color: #0d6efd;
+            transform: translateY(-1px);
+        }
+
+        /* Empty State Styling */
+        .text-center .fas.fa-inbox {
+            color: #dee2e6;
+        }
+
+        #formdata {
+            margin-bottom: 20px !important;
+        }
+    </style>
+    {% endblock %}
