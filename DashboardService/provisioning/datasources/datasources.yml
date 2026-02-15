@@ -22,6 +22,7 @@ datasources:
     isDefault: false
     basicAuth: false
     withCredentials: false
+
     editable: true
     jsonData:
       httpMethod: GET

@@ -4030,6 +4030,19 @@ def checkDatabaseHealth():
                     health_percentage = 50
                 else:
                     health_percentage = 25
+
+                raw_server_ip = db_info[3] if db_info else "Unknown"
+                if raw_server_ip and raw_server_ip != "Unknown":
+                    try:
+                        ip_parts = raw_server_ip.split('.')
+                        if len(ip_parts) == 4:
+                            masked_ip = f"{ip_parts[0]}.{ip_parts[1]}.xxx.xxx"
+                        else:
+                            masked_ip = "xxx.xxx.xxx.xxx"
+                    except:
+                        masked_ip = "xxx.xxx.xxx.xxx"
+                else:
+                    masked_ip = "xxx.xxx.xxx.xxx"
                 
                 return {
                     'status': 1,
@@ -4039,7 +4052,7 @@ def checkDatabaseHealth():
                         'postgres_version': db_info[0] if db_info else "Unknown",
                         'database_name': db_info[1] if db_info else "Unknown", 
                         'current_user': db_info[2] if db_info else "Unknown",
-                        'server_ip': db_info[3] if db_info else "Unknown",
+                        'server_ip': masked_ip,
                         'provider': 'Supabase PostgreSQL'
                     },
                     'metrics': {
@@ -4709,7 +4722,6 @@ def tenant_audit_logs(tenant_id):
                              tenant_id=str(tenant_id))
 
 def log_system_admin_event(action_type, description, category='GENERAL', **kwargs):
-    """Log system admin events explicitly"""
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
         user_email = session.get('email') or session.get('temp_user_email') or 'SYSTEM'
@@ -4726,7 +4738,6 @@ def log_system_admin_event(action_type, description, category='GENERAL', **kwarg
         current_app.logger.error(f"System admin audit logging error: {e}")
 
 def log_tenant_event(action_type, description, category='GENERAL', tenant_id=None, **kwargs):
-    """Log tenant-specific events explicitly"""
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
         user_email = session.get('email') or session.get('temp_user_email')
@@ -4942,18 +4953,18 @@ if __name__ == "__main__":
 # Just comment if it doesnt work
     try:
         update_real_metrics()
-        print("✅ Prometheus metrics initialized")
+        print("Prometheus metrics initialized")
     except Exception as e:
-        print(f"⚠️ Could not initialize metrics: {e}")
+        print(f"Could not initialize metrics: {e}")
     try:
         updater_thread = threading.Thread(target=background_metric_updater, daemon=True)
         updater_thread.start()
-        print("✅ Started background metric updater")
+        print("Started background metric updater")
     except Exception as e:
-        print(f"⚠️ Could not start background updater: {e}")
-    print("📊 Metrics available at: http://localhost:5000/metrics")
-    print("📋 Dashboard data at: http://localhost:5000/dashboard_data")
-    print("🚀 Starting Flask app...")
+        print(f"Could not start background updater: {e}")
+    print("Metrics available at: http://localhost:5000/metrics")
+    print("Dashboard data at: http://localhost:5000/dashboard_data")
+    print("Starting Flask app...")
 #===============================
 
 
