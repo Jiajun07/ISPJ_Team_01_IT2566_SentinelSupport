@@ -13,7 +13,7 @@
 			<div style="font-weight: 600; margin-bottom: 0.5rem;">{{ account_name }}</div>
 		</div>
 
-		<button type="button" class="upload-btn" onclick="window.location.href='/myfiles'">Upload File</button>
+		<button type="button" class="upload-btn" id="upload-trigger">Upload File</button>
 
 		<nav class="rail-nav">
 			<button class="rail-link" type="button" onclick="window.location.href='/myfiles'">
@@ -74,6 +74,19 @@
 		</div>
 	</section>
 </div>
+
+<form id="upload-form" class="upload-form" aria-label="Upload files">
+	<input
+		type="file"
+		id="file-input"
+		name="file"
+		class="file-input visually-hidden"
+		accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt"
+		required
+	>
+	<div id="message" class="message"></div>
+	<button type="submit" class="visually-hidden">Upload</button>
+</form>
 
 <style>
 .verification-card {
@@ -160,6 +173,66 @@
 </style>
 
 <script>
+const allowedExtensions = ["pdf", "doc", "docx", "png", "jpg", "jpeg", "txt"];
+const form = document.getElementById("upload-form");
+const uploadTrigger = document.getElementById("upload-trigger");
+const fileInput = document.getElementById("file-input");
+const messageEl = document.getElementById("message");
+
+const showMessage = (text, type) => {
+	messageEl.textContent = text;
+	messageEl.className = `message ${type}`;
+};
+
+const handleUpload = async (file) => {
+	const ext = file.name.split(".").pop().toLowerCase();
+	if (!allowedExtensions.includes(ext)) {
+		showMessage("Invalid file type. Please choose a supported format.", "error");
+		fileInput.value = "";
+		return;
+	}
+
+	const formData = new FormData();
+	formData.append("file", file);
+
+	try {
+		const response = await fetch(`/upload/temp`, { method: "POST", body: formData });
+		const data = await response.json();
+
+		if (!response.ok || data.error) {
+			showMessage(data.error || `Upload failed (status ${response.status}).`, "error");
+			return;
+		}
+
+		if (data.confirm_url) {
+			window.location.href = data.confirm_url;
+		} else {
+			showMessage("Upload succeeded but no confirm URL returned.", "error");
+		}
+	} catch (err) {
+		showMessage("Upload failed. Please try again.", "error");
+	}
+};
+
+form.addEventListener("submit", (event) => {
+	event.preventDefault();
+	const file = fileInput.files[0];
+	if (!file) {
+		showMessage("Please pick a file to upload.", "error");
+		return;
+	}
+	handleUpload(file);
+});
+
+uploadTrigger.addEventListener("click", () => fileInput.click());
+
+fileInput.addEventListener("change", (event) => {
+	const file = event.target.files[0];
+	if (file) {
+		handleUpload(file);
+	}
+});
+
 const verificationContainer = document.getElementById('verification-container');
 const noVerificationsDiv = document.getElementById('no-verifications');
 
