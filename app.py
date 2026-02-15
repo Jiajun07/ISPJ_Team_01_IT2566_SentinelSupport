@@ -3007,14 +3007,18 @@ def login():
         if superadmin:
             session.clear()
             session['user_type'] = 'superadmin'
-            session['superadmin_id'] = superadmin['id']
-            session['email'] = email_input
+            session['superadmin_id'] = 'SYSTEM'
+            session['email'] = 'System Admin'
+            session['user_role'] = "System Administrator"
             session.permanent = True
 
-            log_tenant_event(
-                action_type='SUPERADMIN_LOGIN_SUCCESS',
-                description=f"Superadmin login: {email_input}",
-                category='SYSTEM_ACTIVITY'
+            log_system_admin_event(
+                action_type='SYSTEM_ADMIN_LOGIN_SUCCESS',
+                description="System admin logged in successfully",
+                category='AUTHENTICATION',
+                severity="info",
+                ip_address=request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR')),
+                user_agent=request.headers.get('User-Agent')
             )
 
             flash("🛡️ Superadmin access granted", "success")
@@ -4724,12 +4728,12 @@ def tenant_audit_logs(tenant_id):
 def log_system_admin_event(action_type, description, category='GENERAL', **kwargs):
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
-        user_email = session.get('email') or session.get('temp_user_email') or 'SYSTEM'
         
         SysLogService.logSystemAdminEvent(
             action_type=action_type,
             description=description,
-            admin_email=user_email,
+            admin_id = "SYSTEM",
+            admin_email="System Admin",
             category=category,
             ip_address=ip_address,
             **kwargs
@@ -4791,6 +4795,13 @@ def log_audit_event(action_type, description, category='GENERAL', force_system=F
 
 @app.route('/superadmincontrolpanel')
 def superadmincontrolpanel():
+    SysLogService.logTheEvent(
+        action_type='SYSTEM_DASHBOARD_ACCESS',
+        description=f'System admin accessed control panel',
+        category='SYSTEM_ADMIN',
+        admin_email=session.get('email'),
+        success=True
+    )
     return render_template('/SuperAdmin/superadmincontrolpanel.html')
 
 @app.route('/system/dashboard')
@@ -4948,8 +4959,6 @@ def dashboard_data():
         })
 
 if __name__ == "__main__":
-
-    
 # Just comment if it doesnt work
     try:
         update_real_metrics()

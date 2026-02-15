@@ -7,7 +7,7 @@
         if (!email || email === 'Unknown User' || !email.includes('@')) return email;
         const [local, domain] = email.split('@');
         const maskedLocal = local.length > 2 ?
-            local[0] + '*'.repeat(local.length - 2) + local[local.length - 1] :
+            local[0] + '*'.repeat(3) + local[local.length - 1] :
             '*'.repeat(local.length);
         const domainParts = domain.split('.');
         const maskedDomain = domainParts[0][0] + '*'.repeat(domainParts[0].length - 1);
@@ -373,12 +373,6 @@
             font-size: 0.9em;
         }
 
-        .masked-email::after {
-            content: " 🔒";
-            font-size: 0.8em;
-            opacity: 0.5;
-        }
-
         .sensitive-info {
             position: relative;
         }
@@ -398,7 +392,6 @@
             z-index: 1000;
         }
 
-        /* Full Width Table Styles */
         .full-width-table {
             width: 100%;
             overflow-x: auto;
@@ -410,7 +403,6 @@
             table-layout: auto;
         }
 
-        /* Container adjustments for full width */
         .container-fluid.px-0 {
             padding-left: 0 !important;
             padding-right: 0 !important;
@@ -421,7 +413,6 @@
             --bs-gutter-y: 0;
         }
 
-        /* Spacing for content inside full width */
         .px-4 {
             padding-left: 1.5rem !important;
             padding-right: 1.5rem !important;
@@ -432,20 +423,15 @@
             margin-right: 1.5rem !important;
         }
 
-        /* ✅ WORKING: Stats Cards Layout - Pure Flexbox with 20px gaps */
-
         .stats-container {
             display: flex;
             gap: 20px;
-            /* Exactly 20px gap between cards */
             margin-bottom: 2rem;
         }
 
         .stats-card-item {
             flex: 1;
-            /* Each card takes equal space */
             min-width: 0;
-            /* Allow shrinking */
         }
 
         .stats-card {

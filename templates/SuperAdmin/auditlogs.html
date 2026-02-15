@@ -3,7 +3,7 @@
 
 <script>
     function maskEmail(email) {
-        if (!email || email === 'System Admin' || !email.includes('@')) return email;
+        if (!email || email === 'System Admin' || !email.includes('@')) return 'System Admin';
         const [local, domain] = email.split('@');
         const maskedLocal = local.length > 2 ?
             local[0] + '*'.repeat(local.length - 2) + local[local.length - 1] :
@@ -194,10 +194,10 @@
                                     </td>
                                     <td class="px-4 py-3">
                                         <div class="text-dark fw-medium">
-                                            <span class="masked-email">{{ log.admin_email or 'System Admin' }}</span>
+                                            <span class="masked-email">{{ 'System Admin' }}</span>
                                         </div>
                                         <small class="text-muted">
-                                            ID: <span class="masked-admin-id">{{ log.admin_id or 'SYSTEM' }}</span>
+                                            ID: <span class="masked-admin-id">{{ 'SYSTEM' }}</span>
                                         </small>
                                     </td>
                                     <td class="px-4 py-3">
@@ -339,12 +339,6 @@
             padding: 2px 4px;
             border-radius: 3px;
             font-size: 0.9em;
-        }
-
-        .masked-email::after {
-            content: " 🔒";
-            font-size: 0.8em;
-            opacity: 0.5;
         }
 
         .sensitive-info {
