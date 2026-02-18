@@ -16,10 +16,11 @@ import smtplib
 import re
 import json
 import atexit
+import threading
 from webbrowser import get
 from dotenv import load_dotenv
 from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash, current_app
-from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash, flash, current_app, send_file
+from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory, jsonify, session, flash, flash, current_app, send_file, Response
 from werkzeug.utils import secure_filename
 from flask_wtf import CSRFProtect
 from sqlalchemy.orm import sessionmaker
@@ -53,6 +54,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from collections import defaultdict, deque
 from ComplianceService.routes.complianceroutes import compliance_bp
 from ComplianceService.routes.exportroutes import export_bp
+from prometheus_client import Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 load_dotenv()
 
@@ -604,7 +606,7 @@ def myfiles():
     #log audit event
     log_audit_event(
         action_type='FILE_LIST_ACCESS',
-        description=f"User accessed file list (tenant_{tenant_id})",
+        description=f"User accessed file list",
         category='FILE_MANAGEMENT',
         target_resource='FILE_LIST',
         additional_data={'file_count': len(files)}
@@ -3255,18 +3257,22 @@ def login():
         if superadmin:
             session.clear()
             session['user_type'] = 'superadmin'
-            session['superadmin_id'] = superadmin['id']
-            session['email'] = email_input
+            session['superadmin_id'] = 'SYSTEM'
+            session['email'] = 'System Admin'
+            session['user_role'] = "System Administrator"
             session.permanent = True
 
-            log_tenant_event(
-                action_type='SUPERADMIN_LOGIN_SUCCESS',
-                description=f"Superadmin login: {email_input}",
-                category='SYSTEM_ACTIVITY'
+            log_system_admin_event(
+                action_type='SYSTEM_ADMIN_LOGIN_SUCCESS',
+                description="System admin logged in successfully",
+                category='AUTHENTICATION',
+                severity="info",
+                ip_address=request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR')),
+                user_agent=request.headers.get('User-Agent')
             )
 
             flash("🛡️ Superadmin access granted", "success")
-            return redirect(url_for('system_admin_audit_dashboard'))
+            return redirect(url_for('superadmincontrolpanel'))
 
         # ✅ PATH 1: TENANT ADMIN (public.tenants table)
         tenant_admin = authenticate_tenant_admin(email_input, password_input)
@@ -4278,6 +4284,19 @@ def checkDatabaseHealth():
                     health_percentage = 50
                 else:
                     health_percentage = 25
+
+                raw_server_ip = db_info[3] if db_info else "Unknown"
+                if raw_server_ip and raw_server_ip != "Unknown":
+                    try:
+                        ip_parts = raw_server_ip.split('.')
+                        if len(ip_parts) == 4:
+                            masked_ip = f"{ip_parts[0]}.{ip_parts[1]}.xxx.xxx"
+                        else:
+                            masked_ip = "xxx.xxx.xxx.xxx"
+                    except:
+                        masked_ip = "xxx.xxx.xxx.xxx"
+                else:
+                    masked_ip = "xxx.xxx.xxx.xxx"
                 
                 return {
                     'status': 1,
@@ -4287,7 +4306,7 @@ def checkDatabaseHealth():
                         'postgres_version': db_info[0] if db_info else "Unknown",
                         'database_name': db_info[1] if db_info else "Unknown", 
                         'current_user': db_info[2] if db_info else "Unknown",
-                        'server_ip': db_info[3] if db_info else "Unknown",
+                        'server_ip': masked_ip,
                         'provider': 'Supabase PostgreSQL'
                     },
                     'metrics': {
@@ -4957,15 +4976,14 @@ def tenant_audit_logs(tenant_id):
                              tenant_id=str(tenant_id))
 
 def log_system_admin_event(action_type, description, category='GENERAL', **kwargs):
-    """Log system admin events explicitly"""
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
-        user_email = session.get('email') or session.get('temp_user_email') or 'SYSTEM'
         
         SysLogService.logSystemAdminEvent(
             action_type=action_type,
             description=description,
-            admin_email=user_email,
+            admin_id = "SYSTEM",
+            admin_email="System Admin",
             category=category,
             ip_address=ip_address,
             **kwargs
@@ -4974,7 +4992,6 @@ def log_system_admin_event(action_type, description, category='GENERAL', **kwarg
         current_app.logger.error(f"System admin audit logging error: {e}")
 
 def log_tenant_event(action_type, description, category='GENERAL', tenant_id=None, **kwargs):
-    """Log tenant-specific events explicitly"""
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
         user_email = session.get('email') or session.get('temp_user_email')
@@ -5024,5 +5041,191 @@ def log_audit_event(action_type, description, category='GENERAL', force_system=F
     except Exception as e:
         current_app.logger.error(f"Audit logging error: {e}")
 
+# Dashboard ===========================================================
+
+@app.route('/superadmincontrolpanel')
+def superadmincontrolpanel():
+    SysLogService.logTheEvent(
+        action_type='SYSTEM_DASHBOARD_ACCESS',
+        description=f'System admin accessed control panel',
+        category='SYSTEM_ADMIN',
+        admin_email=session.get('email'),
+        success=True
+    )
+    return render_template('/SuperAdmin/superadmincontrolpanel.html')
+
+@app.route('/system/dashboard')
+def system_dashboard():
+    if session.get('user_type') != 'superadmin':
+        flash('Access denied. System admin privileges required.', 'error')
+        return redirect(url_for('home'))
+    
+    # Log the access
+    SysLogService.logTheEvent(
+        action_type='SYSTEM_DASHBOARD_ACCESS',
+        description=f'System admin accessed monitoring dashboard',
+        category='SYSTEM_ADMIN',
+        admin_email=session.get('email'),
+        success=True
+    )
+    
+    return render_template('SuperAdmin/system_dashboard_redirect.html')
+
+EVENTS_TOTAL = Counter('events_total', 'Total events', ['type', 'severity'])
+CLIENT_DATABASES = Gauge('client_databases_total', 'Number of client databases', ['status'])
+COMPLIANCE_SCORE = Gauge('compliance_score', 'System compliance score')
+
+def update_real_metrics():
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=7)
+        
+        with MasterSessionLocal() as session:
+            query = text("""
+                SELECT 
+                    COUNT(CASE WHEN action_type LIKE '%LOGIN%' AND success = true THEN 1 END) as successful_logins,
+                    COUNT(CASE WHEN action_type LIKE '%LOGIN%' AND success = false THEN 1 END) as failed_logins,
+                    COUNT(CASE WHEN action_type LIKE '%UPLOAD%' THEN 1 END) as file_uploads,
+                    COUNT(CASE WHEN action_type LIKE '%DOWNLOAD%' THEN 1 END) as file_downloads,
+                    COUNT(CASE WHEN action_type LIKE '%DLP%' THEN 1 END) as dlp_scans,
+                    COUNT(CASE WHEN action_category = 'SECURITY' THEN 1 END) as security_events,
+                    COUNT(CASE WHEN success = false THEN 1 END) as failed_operations,
+                    COUNT(DISTINCT target_tenant_id) as active_tenants,
+                    COUNT(*) as total_events
+                FROM system_audit_logs 
+                WHERE created_at >= :start_date AND created_at <= :end_date
+            """)
+            
+            result = session.execute(query, {
+                'start_date': start_date,
+                'end_date': end_date
+            }).fetchone()
+            
+            if result:
+                EVENTS_TOTAL.labels(type='login_success', severity='info')._value._value = result.successful_logins
+                EVENTS_TOTAL.labels(type='login_failed', severity='warning')._value._value = result.failed_logins
+                EVENTS_TOTAL.labels(type='file_upload', severity='info')._value._value = result.file_uploads
+                EVENTS_TOTAL.labels(type='file_download', severity='info')._value._value = result.file_downloads
+                EVENTS_TOTAL.labels(type='dlp_scan', severity='info')._value._value = result.dlp_scans
+                EVENTS_TOTAL.labels(type='security_event', severity='warning')._value._value = result.security_events
+                
+                CLIENT_DATABASES.labels(status='active').set(result.active_tenants or 0)
+                
+                success_rate = ((result.total_events - result.failed_operations) / result.total_events * 100) if result.total_events > 0 else 100
+                COMPLIANCE_SCORE.set(success_rate)
+                
+                print(f"Updated metrics: {result.total_events} events, {success_rate:.1f}% compliance")
+            else:
+                CLIENT_DATABASES.labels(status='active').set(0)
+                COMPLIANCE_SCORE.set(100)
+                print("No audit data found, using defaults")
+                
+    except Exception as e:
+        print(f"Error updating metrics: {e}")
+        CLIENT_DATABASES.labels(status='active').set(0)
+        COMPLIANCE_SCORE.set(0)
+
+def background_metric_updater():
+    while True:
+        try:
+            update_real_metrics()
+            time.sleep(30)
+        except Exception as e:
+            print(f"Background metric updater error: {e}")
+            time.sleep(30)
+
+@app.route('/metrics')
+def metrics():
+    update_real_metrics()
+    return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
+
+@app.route('/dashboard_data')
+def dashboard_data():
+    with MasterSessionLocal() as session:
+        recent_events_query = text("""
+            SELECT 
+                created_at,
+                admin_email,
+                action_type,
+                action_description,
+                ip_address,
+                success,
+                target_tenant_id
+            FROM system_audit_logs 
+            ORDER BY created_at DESC 
+            LIMIT 10
+        """)
+        
+        events_result = session.execute(recent_events_query)
+        
+        real_events = []
+        for event in events_result:
+            real_events.append({
+                'timestamp': event.created_at.strftime('%Y-%m-%d %H:%M') if event.created_at else 'Unknown',
+                'user_id': event.admin_email or 'System',
+                'action': event.action_type or 'UNKNOWN_ACTION',
+                'details': event.action_description or 'No description',
+                'ip': event.ip_address or 'Unknown IP',
+                'success': event.success,
+                'tenant': event.target_tenant_id or 'System'
+            })
+        
+        tenant_query = text("""
+            SELECT 
+                target_tenant_id,
+                COUNT(*) as activity_count,
+                MAX(created_at) as last_activity,
+                ROUND(AVG(CASE WHEN success THEN 100.0 ELSE 0.0 END), 1) as success_rate
+            FROM system_audit_logs 
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+            AND target_tenant_id IS NOT NULL
+            GROUP BY target_tenant_id
+            ORDER BY activity_count DESC
+        """)
+        
+        tenant_result = session.execute(tenant_query)
+        
+        client_databases = []
+        for tenant in tenant_result:
+            status = 'Active' if tenant.success_rate > 90 else 'Warning' if tenant.success_rate > 70 else 'Critical'
+            
+            client_databases.append({
+                'name': f'Tenant {tenant.target_tenant_id}',
+                'status': status,
+                'last_backup': tenant.last_activity.strftime('%Y-%m-%d') if tenant.last_activity else 'No Activity',
+                'compliance': f'{tenant.success_rate}% Success Rate',
+                'activity_count': tenant.activity_count
+            })
+        
+        return jsonify({
+            'client_databases': client_databases,
+            'events': real_events,
+            'system_status': {
+                'overall': 'Healthy' if len([e for e in real_events if e.get('success', True)]) > len(real_events) * 0.8 else 'Warning',
+                'dlp_status': 'Active' if any('DLP' in e['action'] for e in real_events) else 'Idle',
+                'last_scan': datetime.now().strftime('%m-%d-%Y %H:%M:%S'),
+                'total_events_today': len([e for e in real_events if datetime.now().date().strftime('%Y-%m-%d') in e['timestamp']])
+            }
+        })
+
+
 if __name__ == "__main__":
+# Just comment if it doesnt work
+    try:
+        update_real_metrics()
+        print("Prometheus metrics initialized")
+    except Exception as e:
+        print(f"Could not initialize metrics: {e}")
+    try:
+        updater_thread = threading.Thread(target=background_metric_updater, daemon=True)
+        updater_thread.start()
+        print("Started background metric updater")
+    except Exception as e:
+        print(f"Could not start background updater: {e}")
+    print("Metrics available at: http://localhost:5000/metrics")
+    print("Dashboard data at: http://localhost:5000/dashboard_data")
+    print("Starting Flask app...")
+#===============================
+
+
     app.run(debug=True, use_reloader=False)

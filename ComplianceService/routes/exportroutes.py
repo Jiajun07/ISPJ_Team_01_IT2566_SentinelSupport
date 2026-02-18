@@ -9,11 +9,15 @@ export_bp = Blueprint('export', __name__)
 
 @export_bp.route("/export/compliance/csv")
 def export_compliance_csv():
-    if 'tenant_id' not in session:
-        return redirect(url_for('home'))
+    user_role = session.get('user_type')
+    if user_role not in ['superadmin', 'tenant_admin']:
+        return redirect(url_for('login'))
+    
+    if user_role == 'tenant_admin' and 'tenant_id' not in session:
+        return redirect(url_for('login'))
     user_role = session.get('user_type')
     tenant_id = session.get('tenant_id')
-    if user_role not in ["super_admin", "tenant_admin"]:
+    if user_role not in ["superadmin", "tenant_admin"]:
         abort(403)
     start_date_str = request.args.get('start_date')
     end_date_str = request.args.get('end_date')
@@ -26,7 +30,7 @@ def export_compliance_csv():
             start_date = end_date - timedelta(days=30)
     except ValueError:
         abort(400)
-    if user_role == "super_admin":
+    if user_role == "superadmin":
         logs, summary = ComplianceService.generateComplianceData(
             startDate=start_date, 
             endDate=end_date
@@ -62,11 +66,15 @@ def export_compliance_csv():
 
 @export_bp.route("/export/compliance/json")
 def export_compliance_json():
-    if 'tenant_id' not in session:
-        return redirect(url_for('home'))
+    user_role = session.get('user_type')
+    if user_role not in ['superadmin', 'tenant_admin']:
+        return redirect(url_for('login'))
+    
+    if user_role == 'tenant_admin' and 'tenant_id' not in session:
+        return redirect(url_for('login'))
     user_role = session.get('user_type')
     tenant_id = session.get('tenant_id')
-    if user_role not in ["super_admin", "tenant_admin"]:
+    if user_role not in ["superadmin", "tenant_admin"]:
         abort(403)
     start_date_str = request.args.get('start_date')
     end_date_str = request.args.get('end_date')
@@ -79,7 +87,7 @@ def export_compliance_json():
             start_date = end_date - timedelta(days=30)
     except ValueError:
         abort(400)
-    if user_role == "super_admin":
+    if user_role == "superadmin":
         logs, summary = ComplianceService.generateComplianceData(
             startDate=start_date, 
             endDate=end_date
@@ -116,11 +124,15 @@ def export_compliance_json():
 
 @export_bp.route("/export/compliance/pdf")
 def export_compliance_pdf():
-    if 'tenant_id' not in session:
-        return redirect(url_for('home'))
+    user_role = session.get('user_type')
+    if user_role not in ['superadmin', 'tenant_admin']:
+        return redirect(url_for('login'))
+    
+    if user_role == 'tenant_admin' and 'tenant_id' not in session:
+        return redirect(url_for('login'))
     user_role = session.get('user_type')
     tenant_id = session.get('tenant_id')
-    if user_role not in ["super_admin", "tenant_admin"]:
+    if user_role not in ["superadmin", "tenant_admin"]:
         abort(403)
     start_date_str = request.args.get('start_date')
     end_date_str = request.args.get('end_date')
@@ -134,7 +146,7 @@ def export_compliance_pdf():
             start_date = end_date - timedelta(days=30)
     except ValueError:
         abort(400)
-    if user_role == "super_admin":
+    if user_role == "superadmin":
         logs, summary = ComplianceService.generateComplianceData(
             startDate=start_date, 
             endDate=end_date

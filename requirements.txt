@@ -20,7 +20,6 @@ When adding any new platform of implementations, Add to this page
 19. pip install email-validator
 20. pip install python-dotenv
 21. pip install APScheduler
-22. pip install report-lab
 
 py -m pip install flask, sqlalchemy, psycopg2-binary, bcrypt, psycopg2, flask_wtf, wtforms, itsdangerous, python-docx, pypdf, python-pptx, pandas, en-core-web-sm, presidio-anonymizer, spacy, presidio-analyzer pytessaract pillow opencv-python
 
@@ -38,3 +37,7 @@ To install Pytessaract:
 3. Edit system variables > Click on "Path" > Click "Edit" > "New" > Add the path where Tesseract is installed (e.g., C:\Program Files\Tesseract-OCR)
 4. Click OK to save the changes.
 5. Add a new Variable called TESSDATA_PREFIX and set its value to the "tessdata" folder path inside the Tesseract installation directory (e.g., C:\Program Files\Tesseract-OCR\tessdata)
+
+To install Docker Desktop:
+1. Follow the instructions on the official Docker documentation: https://docs.docker.com/desktop/install/windows-install/
+2. After installation, Do "docker compose up --build" in the main directory where docker-compose.yml is located to build and run the containers.

@@ -84,7 +84,7 @@ class SysLogService:
             if '@' in data_str:
                 local, domain = data_str.split('@')
                 if len(local) > 2:
-                    masked_local = local[0] + '*' * (len(local) - 2) + local[-1]
+                    masked_local = local[0:1] + '*' * 3
                 else:
                     masked_local = '*' * len(local)
                 
@@ -99,7 +99,7 @@ class SysLogService:
         if field_type == 'ip' or re.match(r'\d+\.\d+\.\d+\.\d+', data_str):
             parts = data_str.split('.')
             if len(parts) == 4:
-                return f"{parts[0]}.{parts[1]}.***.***.***"
+                return f"{parts[0]}.{parts[1]}.***.***"
         if field_type == 'hash' or (len(data_str) > 32 and re.match(r'^[a-fA-F0-9]+$', data_str)):
             return data_str[:8] + '*' * (len(data_str) - 8)
         if field_type == 'tenant_id':
