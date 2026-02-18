@@ -106,8 +106,7 @@ class TenantDeactivateForm(FlaskForm):
     submit = SubmitField('Confirm Deactivation')
 
 
-class BackupRecoveryForm(FlaskForm):
-    # Schedule Backup
+class BackupScheduleForm(FlaskForm):
     backup_frequency = SelectField(
         'Frequency',
         choices=[('daily', 'Daily'), ('weekly', 'Weekly'), ('monthly', 'Monthly')],
@@ -116,20 +115,19 @@ class BackupRecoveryForm(FlaskForm):
     )
     backup_time = StringField('Time (HH:MM)', validators=[DataRequired()])
     enable_scheduled = BooleanField('Enable scheduled backups')
-
-    # Backup Scope
-    scope_full = BooleanField('Full tenant data')
+    scope_full = BooleanField('Full tenant data', default=True)
     scope_compliance = BooleanField('Compliance metadata only')
-
     retention_days = IntegerField(
         'Retention (days)',
         default=30,
         validators=[NumberRange(min=1, max=365)]
     )
+    save_settings = SubmitField('💾 Save Backup Settings')
 
-    # Restore Options
+# 🔥 FORM 2: Backup + Restore ONLY
+class BackupActionForm(FlaskForm):
     restore_step = RadioField(
-        'Step',
+        'Restore Type',
         choices=[('choose', 'Choose backup'), ('full_restore', 'Full restore'), ('partial_restore', 'Partial restore')],
         default='choose'
     )
@@ -137,7 +135,5 @@ class BackupRecoveryForm(FlaskForm):
         'Select backup file',
         validators=[FileAllowed(['sql', 'json', 'zip'], 'Backup files only')]
     )
-
-    # Submit buttons
-    backup_submit = SubmitField('Confirm Backup')
-    restore_submit = SubmitField('Start Restore')
+    backup_submit = SubmitField('💾 Create Backup Now')
+    restore_submit = SubmitField('🔄 Start Restore')

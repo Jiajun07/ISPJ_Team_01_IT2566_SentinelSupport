@@ -15,6 +15,9 @@ MASTER_DB_URL = (
 DB_USE_PGBOUNCER = os.getenv("DB_USE_PGBOUNCER", "false").lower() == "true"
 db = SQLAlchemy()
 
+
+
+
 class TenantSecurity(db.Model):
     __tablename__ = 'tenant_security'
     id = db.Column(db.Integer, primary_key=True)
@@ -35,6 +38,23 @@ class Tenant(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     archived_at = db.Column(db.DateTime)
 
+
+# models.py - ADD THIS CLASS
+class TenantBackupConfig(db.Model):
+    __tablename__ = 'tenant_backup_config'
+
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), unique=True)
+    frequency = db.Column(db.String(20), default='daily')  # daily, weekly, monthly
+    backup_time = db.Column(db.String(5), default='02:00')  # HH:MM
+    enable_scheduled = db.Column(db.Boolean, default=False)
+    scope_full = db.Column(db.Boolean, default=True)
+    scope_compliance = db.Column(db.Boolean, default=False)
+    retention_days = db.Column(db.Integer, default=30)
+    last_backup = db.Column(db.DateTime, nullable=True)
+    next_backup = db.Column(db.DateTime, nullable=True)
+
+    tenant = db.relationship('Tenant', backref='backup_config')
 
 
 class User(db.Model):
@@ -81,6 +101,12 @@ class TwoFactorAuth(db.Model):
     enabled = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+def should_run_backup(config):
+    """Check if backup should run now"""
+    if not config.last_backup:
+        return True
+    return config.next_backup <= datetime.now()
 
 
 def get_last_backup(tenant_id: int):

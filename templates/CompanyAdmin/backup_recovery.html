@@ -1,0 +1,178 @@
+{% extends "admin_base.html" %}
+
+{% block content %}
+<div class="container-fluid mt-4 pt-3">
+    <div class="row">
+        <div class="col-12">
+            <h2 class="mb-4">
+                <i class="fas fa-database me-2"></i>
+                Backup & Recovery - {{ tenant.company_name }}
+            </h2>
+
+            <!-- 🔥 FORM 1: SCHEDULE SETTINGS ONLY -->
+            <form method="POST" novalidate class="mb-4">
+                {{ schedule_form.hidden_tag() }}
+
+                <!-- Backup Config Card - IDENTICAL styling -->
+                <div class="card shadow-sm border-0 mb-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-clock me-2"></i>Scheduled Backups
+                        </h5>
+                    </div>
+                    <div class="card-body p-4">
+                        <div class="row g-3">
+                            <div class="col-lg-3 col-md-6">
+                                {{ schedule_form.backup_frequency.label(class="form-label fw-semibold") }}
+                                {{ schedule_form.backup_frequency(class="form-select") }}
+                            </div>
+                            <div class="col-lg-3 col-md-6">
+                                {{ schedule_form.backup_time.label(class="form-label fw-semibold") }}
+                                {{ schedule_form.backup_time(class="form-control", placeholder="HH:MM") }}
+                            </div>
+                            <div class="col-lg-3 col-md-6">
+                                <div class="form-check mt-2">
+                                    {{ schedule_form.enable_scheduled(class="form-check-input") }}
+                                    {{ schedule_form.enable_scheduled.label(class="form-check-label fw-semibold") }}
+                                </div>
+                            </div>
+                            <div class="col-lg-3 col-md-6">
+                                {{ schedule_form.retention_days.label(class="form-label fw-semibold") }}
+                                {{ schedule_form.retention_days(class="form-control") }}
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mt-3">
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    {{ schedule_form.scope_full(class="form-check-input") }}
+                                    {{ schedule_form.scope_full.label(class="form-check-label") }}
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    {{ schedule_form.scope_compliance(class="form-check-input") }}
+                                    {{ schedule_form.scope_compliance.label(class="form-check-label") }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Save Button - INSIDE card footer -->
+                    <div class="card-footer bg-light border-0 text-center pt-3">
+                        {{ schedule_form.save_settings(class="btn btn-success btn-lg px-5 py-2 shadow-sm") }}
+                    </div>
+                </div>
+            </form>
+
+            <!-- 🔥 FORM 2: ACTIONS ONLY (multipart for file upload) -->
+            <form method="POST" enctype="multipart/form-data" novalidate>
+                {{ action_form.hidden_tag() }}
+
+                <!-- Manual Backup Button -->
+                <div class="mb-4 text-center">
+                    {{ action_form.backup_submit(class="btn btn-primary btn-lg px-5 py-2 shadow-sm") }}
+                </div>
+
+                <!-- Restore Card - IDENTICAL styling -->
+                <div class="card shadow-sm border-0 mb-4">
+                    <div class="card-header bg-warning text-dark">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-upload me-2"></i>🔄 Restore from Backup
+                        </h5>
+                    </div>
+                    <div class="card-body p-4">
+                        <!-- Radio Buttons -->
+                        <div class="mb-4">
+                            <label class="form-label fw-semibold mb-3 d-block">Restore Options</label>
+                            <div class="row g-3">
+                                {% for subfield in action_form.restore_step %}
+                                    <div class="col-auto">
+                                        <div class="form-check form-check-inline">
+                                            {{ subfield(class="form-check-input") }}
+                                            {{ subfield.label(class="form-check-label") }}
+                                        </div>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+
+                        <!-- File Upload -->
+                        <div class="mb-4">
+                            {{ action_form.backup_file.label(class="form-label fw-semibold") }}
+                            {{ action_form.backup_file(class="form-control") }}
+                            <div class="form-text">Supported: .sql, .json, .zip</div>
+                        </div>
+
+                        <div class="text-end">
+                            {{ action_form.restore_submit(class="btn btn-warning btn-lg px-4") }}
+                        </div>
+                    </div>
+                </div>
+            </form>
+
+            <!-- Backup List - OUTSIDE forms -->
+            <!-- Backup List - FIXED TABLE -->
+            <!-- Backup List - FIXED CSRF + PROPER COLUMNS -->
+            {% if backups %}
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-success text-white">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-list me-2"></i>📋 Recent Backups ({{ backups|length }})
+                    </h5>
+                </div>
+                <div class="card-body p-4">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>File</th>
+                                    <th>Date</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for backup in backups %}
+                                <tr>
+                                    <!-- File column -->
+                                    <td><small class="text-muted">{{ backup.file[:30] }}...</small></td>
+                                    <!-- Date column -->
+                                    <td>{{ backup.date.strftime('%d/%m %H:%M') }}</td>
+                                    <!-- Status column -->
+                                    <td><span class="badge bg-success">Ready</span></td>
+                                    <!-- Actions column - FIXED -->
+                                    <td>
+                                        <div class="btn-group btn-group-sm">
+                                            <!-- Download -->
+                                            <a href="{{ url_for('backup_download', tenant_id=tenant_id, filename=backup.file) }}"
+                                               class="btn btn-outline-primary">📥</a>
+                                            <!-- Delete - HIDDEN CSRF -->
+                                            <form method="POST" action="{{ url_for('backup_delete', tenant_id=tenant_id, filename=backup.file) }}"
+                                                  style="display: inline;" onsubmit="return confirm('Delete {{ backup.file }}?')">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">  <!-- ✅ HIDDEN -->
+                                                <button type="submit" class="btn btn-outline-danger">🗑️</button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="alert alert-info border-0 shadow-sm">
+                <div class="d-flex align-items-center">
+                    <i class="fas fa-info-circle fs-3 me-3 text-primary"></i>
+                    <div>
+                        <h5 class="mb-1">No backups yet</h5>
+                        <p class="mb-0">Create your first backup using the button above!</p>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

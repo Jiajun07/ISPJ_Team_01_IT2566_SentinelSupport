@@ -31,11 +31,12 @@ from database import (db, MasterSessionLocal, list_backups, restore_backup, get_
                       store_file_in_db, add_file_version, get_file_from_db, get_all_files_for_tenant, 
                       get_file_versions_from_db, delete_file_from_db, restore_file_from_db, update_file_metadata,
                       create_share_link, get_share_link_by_token, update_share_link_access,
-                      create_key_exchange, get_key_exchange, update_key_exchange, log_sharing_activity, authenticate_superadmin)
+                      create_key_exchange, get_key_exchange, update_key_exchange, log_sharing_activity, authenticate_superadmin, should_run_backup,
+                      TenantBackupConfig)
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import (Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm,
-                   SecurityBaselineForm, TenantRecoveryForm)
+                   SecurityBaselineForm, TenantRecoveryForm, BackupScheduleForm, BackupActionForm)
 from werkzeug.security import generate_password_hash, check_password_hash
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -45,7 +46,6 @@ from DLPScannerModules.FileProcessor import FileProcessor
 from datetime import datetime, timedelta
 from sqlalchemy import text
 from database import archive_tenant, get_tenant_stats, Tenant
-from forms import BackupRecoveryForm
 from AuditService.LogService import SysLogService
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
@@ -606,7 +606,7 @@ def myfiles():
     #log audit event
     log_audit_event(
         action_type='FILE_LIST_ACCESS',
-        description=f"User accessed file list (tenant_{tenant_id})",
+        description=f"User accessed file list",
         category='FILE_MANAGEMENT',
         target_resource='FILE_LIST',
         additional_data={'file_count': len(files)}
@@ -2515,15 +2515,37 @@ def daily_retention_cleanup():
         except Exception as e:
             print(f"❌ Cleanup failed for tenant_{tenant.id}: {e}")
 
-# Schedule daily at 2AM
+
+
+
+
+def scheduled_tenant_backups():
+    """Run scheduled backups for all tenants"""
+    configs = TenantBackupConfig.query.filter_by(enable_scheduled=True).all()
+    for config in configs:
+        if should_run_backup(config):
+            backup_file = backup_tenant(config.tenant_id)
+            if backup_file:
+                config.last_backup = datetime.now()
+                config.next_backup = calculate_next_backup(config.frequency, config.backup_time)
+                db.session.commit()
+
+# ✅ NEW - Staggered schedule
 scheduler.add_job(
     daily_retention_cleanup,
     'cron',
-    hour=2, minute=0,
+    hour=2, minute=0,  # 2:00 AM - Cleanup first
     id='retention_cleanup',
     replace_existing=True
 )
 
+scheduler.add_job(
+    scheduled_tenant_backups,
+    'cron',
+    hour=2, minute=15,  # 2:15 AM - Backups after cleanup
+    id='backup_scheduler',
+    replace_existing=True
+)
 # Shutdown scheduler when app exits
 atexit.register(lambda: scheduler.shutdown())
 
@@ -2783,6 +2805,18 @@ def company_signup():
             db.session.add(security)
             db.session.commit()
 
+            backup_config = TenantBackupConfig(
+                tenant_id=tenant_id,
+                frequency='daily',
+                backup_time='02:00',
+                enable_scheduled=False,  # Admin enables later
+                scope_full=True,
+                retention_days=30
+            )
+            db.session.add(backup_config)
+            db.session.commit()
+            print(f"✅ Backup config created for tenant_{tenant_id}")
+
             # Auto-apply RLS policies
             apply_rls_policies(tenant_id, security)
             print(f"✅ Security baseline + RLS applied to tenant_{tenant_id}")
@@ -2888,39 +2922,158 @@ def tenant_recovery(tenant_id):
                            tenant=tenant, stats=stats, form=form, tenant_id=tenant_id)
 
 
-def backup_tenant(tenant_id: int):
-    """Create Supabase-compatible backup (no PgBouncer)"""
+def backup_tenant(tenant_id: int) -> str:
+    """Create pg_dump backup of tenant schema"""
     schema = f"tenant_{tenant_id}"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_file = f"backups/{schema}_backup_{timestamp}.sql"
+    backup_file = f"backups/{schema}_{timestamp}.sql"
 
-    # ✅ FIX: Separate host/port/username/database for pg_dump
+    os.makedirs('backups', exist_ok=True)
+
+    # ✅ SUPABASE DIRECT CONNECTION (port 5432, IPv6 or IPv4 add-on)
     cmd = [
         'pg_dump',
-        '-h', 'aws-1-ap-south-1.pooler.supabase.com',
-        '-p', '5432',  # Direct port, NOT 6543 (PgBouncer)
+        '-h', 'aws-1-ap-south-1.pooler.supabase.com',  # Your pooler
+        '-p', '5432',
         '-U', 'postgres.ijbxuudpvxsjjdugewuj',
         '-d', 'postgres',
         f'--schema={schema}',
         '--no-owner',
         '--no-privileges',
-        '-f', backup_file
+        '--clean',
+        '--if-exists',
+        '-f', backup_file,
+        '--verbose'  # 🔥 Debug output
     ]
 
-    # Create backups dir if missing
-    os.makedirs('backups', exist_ok=True)
+    env = os.environ.copy()
+    env['PGPASSWORD'] = 'SentinelSupport*2026'
 
-    result = subprocess.run(cmd,
-                            capture_output=True,
-                            text=True,
-                            env={"PGPASSWORD": "SentinelSupport*2026"})
+    print(f"🔄 Running: {' '.join(cmd)}")  # Debug
 
-    if result.returncode == 0:
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=60)
+
+    print(f"Return code: {result.returncode}")  # Debug
+    print(f"STDOUT: {result.stdout[:300]}")  # Debug
+    print(f"STDERR: {result.stderr[:300]}")  # Debug
+
+    if result.returncode == 0 and os.path.exists(backup_file):
         print(f"✅ Backup created: {backup_file}")
+        log_tenant_event('BACKUP_CREATED', f"Manual backup {backup_file}", tenant_id)
         return backup_file
     else:
-        print(f"❌ Backup failed: {result.stderr}")
-        return None  # Graceful failure
+        print(f"❌ Backup FAILED:")
+        print(f"STDERR: {result.stderr}")
+        flash(f"❌ Backup failed: {result.stderr[:100]}", "danger")
+        return None
+
+
+def restore_tenant_backup(tenant_id: int, backup_filename: str) -> str:
+    """Restore tenant schema from backup file - FULL DEBUG"""
+    schema = f"tenant_{tenant_id}"
+    filepath = f"backups/{backup_filename}"
+
+    print(f"🔍 RESTORE START: tenant_{tenant_id}")
+    print(f"📁 File: {filepath}")
+
+    # Step 1: Check file exists
+    if not os.path.exists(filepath):
+        print("❌ FILE NOT FOUND")
+        return "❌ Backup file not found on server"
+
+    print(f"✅ File found: {os.path.getsize(filepath)} bytes")
+
+    # Step 2: Test psql availability
+    try:
+        psql_test = subprocess.run(['psql', '--version'],
+                                   capture_output=True, text=True, timeout=10)
+        print(f"✅ psql version: {psql_test.stdout.strip()}")
+    except FileNotFoundError:
+        print("❌ PSQL NOT INSTALLED")
+        return "❌ psql not installed. Install PostgreSQL client tools."
+
+    # Step 3: Build restore command
+    cmd = [
+        'psql',
+        '-h', 'aws-1-ap-south-1.pooler.supabase.com',
+        '-p', '5432',
+        '-U', 'postgres.ijbxuudpvxsjjdugewuj',
+        '-d', 'postgres',
+        '-v', 'ON_ERROR_STOP=1',
+        '-f', filepath,
+        f"--single-transaction",  # Atomic restore
+        f"--command=SET search_path={schema}"
+    ]
+
+    env = os.environ.copy()
+    env['PGPASSWORD'] = 'SentinelSupport*2026'
+
+    print(f"🚀 EXECUTING: {' '.join(cmd)}")
+
+    # Step 4: Execute restore
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+
+        print(f"📊 RETURN CODE: {result.returncode}")
+        print(f"📤 STDOUT: {result.stdout[:500]}")
+        print(f"📤 STDERR: {result.stderr[:500]}")
+
+        if result.returncode == 0:
+            print("🎉 RESTORE SUCCESS!")
+            log_tenant_event('BACKUP_RESTORED', f"Restored {backup_filename}", tenant_id)
+            return f"✅ SUCCESS! Restored {backup_filename} to tenant_{tenant_id}"
+        else:
+            print("❌ RESTORE FAILED")
+            return f"❌ FAILED (code {result.returncode}): {result.stderr[:200]}"
+
+    except subprocess.TimeoutExpired:
+        print("⏰ TIMEOUT")
+        return "❌ Restore timeout (5+ minutes)"
+    except FileNotFoundError:
+        print("❌ PSQL MISSING")
+        return "❌ psql command not found - install PostgreSQL"
+    except Exception as e:
+        print(f"💥 EXCEPTION: {str(e)}")
+        return f"❌ Error: {str(e)}"
+
+
+def get_tenant_backups(tenant_id: int) -> list:
+    """List backup files for tenant"""
+    schema = f"tenant_{tenant_id}"
+    backups = []
+    backups_dir = 'backups'
+    if os.path.exists(backups_dir):
+        for file in os.listdir(backups_dir):
+            if file.startswith(schema) and file.endswith('.sql'):
+                backups.append({
+                    'file': file,
+                    'date': datetime.fromtimestamp(os.path.getmtime(f'{backups_dir}/{file}'))
+                })
+    return sorted(backups, key=lambda x: x['date'], reverse=True)
+
+
+def calculate_next_backup(frequency: str, time_str: str) -> datetime:
+    """Calculate next backup time"""
+    now = datetime.now()
+    hour, minute = map(int, time_str.split(':'))
+
+    if frequency == 'daily':
+        next_backup = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if next_backup <= now:
+            next_backup += timedelta(days=1)
+    elif frequency == 'weekly':
+        next_backup = now + timedelta(days=7 - now.weekday())
+        next_backup = next_backup.replace(hour=hour, minute=minute)
+    else:  # monthly
+        if now.day <= 1:
+            next_backup = now.replace(day=1, hour=hour, minute=minute)
+        else:
+            next_month = now.month % 12 + 1
+            next_year = now.year + (now.month // 12)
+            next_backup = now.replace(year=next_year, month=next_month, day=1,
+                                      hour=hour, minute=minute)
+
+    return next_backup
 
 
 @app.route('/tenant/<int:tenant_id>/security-baselines', methods=['GET', 'POST'])
@@ -2977,6 +3130,103 @@ def tenant_security_baselines(tenant_id):
     return render_template('CompanyAdmin/security_baselines.html', form=form, tenant_id=tenant_id)
 
 
+@app.route('/tenant/<int:tenant_id>/backup-recovery', methods=['GET', 'POST'])
+def tenant_backup_recovery(tenant_id):
+    if str(session.get('tenant_id')) != str(tenant_id):
+        return redirect(url_for('login'))
+
+    tenant = Tenant.query.get_or_404(tenant_id)
+    config = TenantBackupConfig.query.filter_by(tenant_id=tenant_id).first()
+
+    schedule_form = BackupScheduleForm(obj=config)
+    action_form = BackupActionForm()
+    backups = get_tenant_backups(tenant_id)
+
+    # Form 1: Settings ✅
+    if schedule_form.validate_on_submit() and schedule_form.save_settings.data:
+        if not config:
+            config = TenantBackupConfig(tenant_id=tenant_id)
+        schedule_form.populate_obj(config)
+        config.next_backup = calculate_next_backup(config.frequency, config.backup_time)
+        db.session.add(config)
+        db.session.commit()
+        flash("✅ Schedule updated!", "success")
+        return redirect(url_for('tenant_backup_recovery', tenant_id=tenant_id))
+
+    # Form 2: Actions ✅ FIXED
+    if action_form.validate_on_submit():
+        if action_form.backup_submit.data:
+            backup_file = backup_tenant(tenant_id)
+            if backup_file:
+                flash(f"✅ Backup created!", "success")
+            else:
+                flash("❌ Backup failed", "danger")
+
+        elif action_form.restore_submit.data and action_form.backup_file.data:
+            uploaded_file = action_form.backup_file.data
+
+            if uploaded_file and uploaded_file.filename:
+                # SAVE UPLOADED FILE
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                saved_filename = f"tenant_{tenant_id}_restore_{timestamp}.sql"
+                saved_path = f"backups/{saved_filename}"
+
+                os.makedirs('backups', exist_ok=True)
+                uploaded_file.save(saved_path)
+
+                print(f"💾 SAVED: {saved_path}")
+
+                # RESTORE FROM SAVED FILE
+                result = restore_tenant_backup(tenant_id, saved_filename)
+                print(f"🔍 RESULT: {result}")
+                flash(result, "info")
+            else:
+                flash("❌ No file selected", "danger")
+
+        return redirect(url_for('tenant_backup_recovery', tenant_id=tenant_id))
+
+    return render_template('CompanyAdmin/backup_recovery.html',
+                           schedule_form=schedule_form,
+                           action_form=action_form,
+                           tenant=tenant, backups=backups, tenant_id=tenant_id)
+
+
+# 🔥 DOWNLOAD ROUTE (add this)
+@app.route('/tenant/<int:tenant_id>/backup-download/<path:filename>')
+def backup_download(tenant_id, filename):
+    if str(session.get('tenant_id')) != str(tenant_id):
+        return redirect(url_for('login'))
+
+    # Security: Only tenant's own backups
+    if filename.startswith(f'tenant_{tenant_id}'):
+        try:
+            return send_from_directory('backups', filename, as_attachment=True)
+        except FileNotFoundError:
+            flash("❌ Backup file not found", "danger")
+    return "Unauthorized", 403
+
+
+# 🔥 DELETE ROUTE (add this)
+@app.route('/tenant/<int:tenant_id>/backup-delete/<path:filename>', methods=['POST'])
+@csrf.exempt  # 🔥 DISABLE CSRF FOR THIS ROUTE ONLY
+def backup_delete(tenant_id, filename):
+    if str(session.get('tenant_id')) != str(tenant_id):
+        return redirect(url_for('login'))
+
+    if filename.startswith(f'tenant_{tenant_id}'):
+        filepath = f'backups/{filename}'
+        try:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+                flash(f"✅ Deleted: {filename}", "success")
+            else:
+                flash("❌ File not found", "danger")
+        except Exception as e:
+            flash(f"❌ Delete failed: {str(e)}", "danger")
+
+    return redirect(url_for('tenant_backup_recovery', tenant_id=tenant_id))
+
+
 #TODO tristan stuff -------------------------------------------------------------------------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -2999,14 +3249,18 @@ def login():
         if superadmin:
             session.clear()
             session['user_type'] = 'superadmin'
-            session['superadmin_id'] = superadmin['id']
-            session['email'] = email_input
+            session['superadmin_id'] = 'SYSTEM'
+            session['email'] = 'System Admin'
+            session['user_role'] = "System Administrator"
             session.permanent = True
 
-            log_tenant_event(
-                action_type='SUPERADMIN_LOGIN_SUCCESS',
-                description=f"Superadmin login: {email_input}",
-                category='SYSTEM_ACTIVITY'
+            log_system_admin_event(
+                action_type='SYSTEM_ADMIN_LOGIN_SUCCESS',
+                description="System admin logged in successfully",
+                category='AUTHENTICATION',
+                severity="info",
+                ip_address=request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR')),
+                user_agent=request.headers.get('User-Agent')
             )
 
             flash("🛡️ Superadmin access granted", "success")
@@ -4022,6 +4276,19 @@ def checkDatabaseHealth():
                     health_percentage = 50
                 else:
                     health_percentage = 25
+
+                raw_server_ip = db_info[3] if db_info else "Unknown"
+                if raw_server_ip and raw_server_ip != "Unknown":
+                    try:
+                        ip_parts = raw_server_ip.split('.')
+                        if len(ip_parts) == 4:
+                            masked_ip = f"{ip_parts[0]}.{ip_parts[1]}.xxx.xxx"
+                        else:
+                            masked_ip = "xxx.xxx.xxx.xxx"
+                    except:
+                        masked_ip = "xxx.xxx.xxx.xxx"
+                else:
+                    masked_ip = "xxx.xxx.xxx.xxx"
                 
                 return {
                     'status': 1,
@@ -4031,7 +4298,7 @@ def checkDatabaseHealth():
                         'postgres_version': db_info[0] if db_info else "Unknown",
                         'database_name': db_info[1] if db_info else "Unknown", 
                         'current_user': db_info[2] if db_info else "Unknown",
-                        'server_ip': db_info[3] if db_info else "Unknown",
+                        'server_ip': masked_ip,
                         'provider': 'Supabase PostgreSQL'
                     },
                     'metrics': {
@@ -4701,15 +4968,14 @@ def tenant_audit_logs(tenant_id):
                              tenant_id=str(tenant_id))
 
 def log_system_admin_event(action_type, description, category='GENERAL', **kwargs):
-    """Log system admin events explicitly"""
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
-        user_email = session.get('email') or session.get('temp_user_email') or 'SYSTEM'
         
         SysLogService.logSystemAdminEvent(
             action_type=action_type,
             description=description,
-            admin_email=user_email,
+            admin_id = "SYSTEM",
+            admin_email="System Admin",
             category=category,
             ip_address=ip_address,
             **kwargs
@@ -4718,7 +4984,6 @@ def log_system_admin_event(action_type, description, category='GENERAL', **kwarg
         current_app.logger.error(f"System admin audit logging error: {e}")
 
 def log_tenant_event(action_type, description, category='GENERAL', tenant_id=None, **kwargs):
-    """Log tenant-specific events explicitly"""
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
         user_email = session.get('email') or session.get('temp_user_email')
@@ -4772,6 +5037,13 @@ def log_audit_event(action_type, description, category='GENERAL', force_system=F
 
 @app.route('/superadmincontrolpanel')
 def superadmincontrolpanel():
+    SysLogService.logTheEvent(
+        action_type='SYSTEM_DASHBOARD_ACCESS',
+        description=f'System admin accessed control panel',
+        category='SYSTEM_ADMIN',
+        admin_email=session.get('email'),
+        success=True
+    )
     return render_template('/SuperAdmin/superadmincontrolpanel.html')
 
 @app.route('/system/dashboard')
@@ -4928,24 +5200,23 @@ def dashboard_data():
             }
         })
 
-if __name__ == "__main__":
 
-    
+if __name__ == "__main__":
 # Just comment if it doesnt work
     try:
         update_real_metrics()
-        print("✅ Prometheus metrics initialized")
+        print("Prometheus metrics initialized")
     except Exception as e:
-        print(f"⚠️ Could not initialize metrics: {e}")
+        print(f"Could not initialize metrics: {e}")
     try:
         updater_thread = threading.Thread(target=background_metric_updater, daemon=True)
         updater_thread.start()
-        print("✅ Started background metric updater")
+        print("Started background metric updater")
     except Exception as e:
-        print(f"⚠️ Could not start background updater: {e}")
-    print("📊 Metrics available at: http://localhost:5000/metrics")
-    print("📋 Dashboard data at: http://localhost:5000/dashboard_data")
-    print("🚀 Starting Flask app...")
+        print(f"Could not start background updater: {e}")
+    print("Metrics available at: http://localhost:5000/metrics")
+    print("Dashboard data at: http://localhost:5000/dashboard_data")
+    print("Starting Flask app...")
 #===============================
 
 
