@@ -36,7 +36,7 @@ from database import (db, MasterSessionLocal, list_backups, restore_backup, get_
 from tenant_service import get_db_name_for_company
 from markupsafe import escape
 from forms import (Loginform, SignUpForm, ForgetPasswordForm, ResetPasswordForm, TenantDeactivateForm, CompanySignupForm,
-                   SecurityBaselineForm, TenantRecoveryForm, BackupScheduleForm, BackupActionForm)
+                   SecurityBaselineForm, TenantRecoveryForm, BackupScheduleForm, BackupActionForm,AddTenantUserForm)
 from werkzeug.security import generate_password_hash, check_password_hash
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -1897,59 +1897,104 @@ def confirm_upload(temp_id):
 @app.route('/scan/dlp/<temp_id>', methods=['GET'])
 @csrf.exempt
 def scan_dlp_temp_file(temp_id):
-    """Scan a temporary file with DLP scanner and return sensitivity level."""
+    """Scan a temporary file with DLP scanner and apply Tenant Security Policies."""
+    tenant_id = get_current_tenant()
+
+    # 1. Locate file
     pending_path = _pending_path(temp_id)
     if not pending_path or not os.path.exists(pending_path):
         return jsonify({"error": "File not found"}), 404
-    
+
     try:
         pending_file = os.path.basename(pending_path)
         original_name = pending_file.split("__", 1)[1] if "__" in pending_file else pending_file
 
+        # 2. Extract Text (Handles PDFs, DOCX, and Images via OCR)
         with open(pending_path, "rb") as f:
             from werkzeug.datastructures import FileStorage
             file = FileStorage(stream=f, filename=original_name)
 
+            # [cite_start]Check if file type is supported [cite: 96]
             if not fileProcessor.passedProcessing(file):
                 return jsonify({"error": "File type not supported for DLP scanning."}), 400
 
+            # [cite_start]Extract text (triggers OCR if image) [cite: 99, 101]
             extracted_text = fileProcessor.readTextFromFile(file)
+
+        # 3. Perform Scan
+        matches = []
+        risk_level = "Low"
+        risk_result = {}
 
         if extracted_text:
             matches = dlpScanner.scan_text(extracted_text)
             risk_result = dlpScanner.calculateRisk(matches)
-
-            risk_to_sensitivity = {
-                "Critical": "Restricted",
-                "High": "Confidential",
-                "Medium": "Internal",
-                "Low": "Public"
-            }
-
             risk_level = risk_result.get("level", "Low")
-            sensitivity = risk_to_sensitivity.get(risk_level, "Public")
 
-            return jsonify({
-                "success": True,
-                "riskLevel": risk_level,
-                "riskScore": risk_result.get("score", 0),
-                "sensitivity": sensitivity,
-                "totalMatches": risk_result.get("total_matches", 0),
-                "severityBreakdown": risk_result.get("severity_breakdown", {})
-            }), 200
+        # 4. Apply Tenant Security Policies
+        # Fetch current settings from database
+        security_policy = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
+        if not security_policy:
+            security_policy = TenantSecurity(dlp_monitor_only=True)  # Default fallback
+
+        # Default Response
+        action = "MONITOR"
+        message = "File is safe."
+
+        # Only apply restrictions if Risk is NOT Low
+        if risk_level in ["Critical", "High", "Medium"]:
+
+            # Policy A: Trigger Incident (Background Logging)
+            if security_policy.dlp_trigger_incident:
+                log_tenant_event(
+                    action_type='DLP_INCIDENT_TRIGGERED',
+                    description=f"🚨 DLP VIOLATION: {original_name} contains {risk_level} risk data.",
+                    category='SECURITY_INCIDENT',
+                    target_resource='FILE',
+                    resource_id=original_name,
+                    tenant_id=tenant_id,
+                    additional_data={'risk_score': risk_result.get("score", 0)}
+                )
+
+            # Policy B: Determine User Action (Hierarchy: Block > Justify > Notify > Monitor)
+            if security_policy.dlp_block_action:
+                action = "BLOCK"
+                message = f"⛔ Upload Blocked: File contains {risk_level} risk data. Policy prohibits this."
+
+            elif security_policy.dlp_require_approval:
+                action = "JUSTIFY"
+                message = f"⚠️ Warning: {risk_level} risk data detected. Business justification required."
+
+            elif security_policy.dlp_notify_user:
+                action = "WARN"
+                message = "🛡️ Caution: This action involves sensitive data. Proceed only if necessary."
+
+            else:
+                action = "MONITOR"
+                message = "File scanned. Event logged."
+
+        # 5. Return JSON
+        risk_to_sensitivity = {
+            "Critical": "Restricted", "High": "Confidential",
+            "Medium": "Internal", "Low": "Public"
+        }
+        sensitivity = risk_to_sensitivity.get(risk_level, "Public")
 
         return jsonify({
             "success": True,
-            "riskLevel": "Low",
-            "riskScore": 0,
-            "sensitivity": "Public",
-            "totalMatches": 0,
-            "severityBreakdown": {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+            "riskLevel": risk_level,
+            "riskScore": risk_result.get("score", 0),
+            "sensitivity": sensitivity,
+            "totalMatches": risk_result.get("total_matches", 0),
+            "severityBreakdown": risk_result.get("severity_breakdown", {}),
+
+            # Frontend uses these to block buttons or show textareas
+            "action": action,
+            "message": message
         }), 200
 
     except Exception as e:
         return jsonify({"error": f"DLP scanning failed: {str(e)}"}), 500
-
 
 @app.route('/upload/version/temp/<path:filename>', methods=['POST'])
 @csrf.exempt
@@ -2001,10 +2046,10 @@ def confirm_version_upload(temp_id, original_filename):
     """Confirm and finalize version upload to database."""
     from urllib.parse import unquote
     original_filename = unquote(original_filename)
-    
+
     tenant_id = get_current_tenant()
     user_email = session.get('email', 'Unknown')
-    
+
     pending_path = _pending_path(temp_id)
     if not pending_path or not os.path.exists(pending_path):
         return "Pending file not found", 404
@@ -2021,20 +2066,20 @@ def confirm_version_upload(temp_id, original_filename):
         if not existing_file:
             flash("Original file not found", "danger")
             return redirect(url_for('myfiles'))
-        
+
         document_id = existing_file['document_id']
-        
+
         # Read new version data
         with open(pending_path, 'rb') as f:
             file_data = f.read()
-        
+
         # Determine MIME type
         import mimetypes
         mime_type, _ = mimetypes.guess_type(new_filename)
         if not mime_type:
             mime_type = 'application/octet-stream'
-        
-        # Add new version to database
+
+        # [cite_start]Add new version to database [cite: 325]
         result = add_file_version(
             tenant_id=tenant_id,
             document_id=document_id,
@@ -2044,13 +2089,31 @@ def confirm_version_upload(temp_id, original_filename):
             file_hash=file_hash,
             mime_type=mime_type
         )
-        
+
+        # 🔥 NEW: Save Justification if provided
+        justification = request.form.get('justification', '').strip()
+        if justification:
+            try:
+                # Append justification to the MAIN file's notes
+                schema_name = f"tenant_{tenant_id}"
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                note_entry = f"\n[v{result.get('version_number')} Justification {timestamp}]: {justification}"
+
+                db.session.execute(text(f'''
+                    UPDATE "{schema_name}".files 
+                    SET notes = COALESCE(notes, '') || :note 
+                    WHERE document_id = :did
+                '''), {'note': note_entry, 'did': document_id})
+                db.session.commit()
+            except Exception as e:
+                print(f"Error saving justification: {e}")
+
         # Clean up pending file
         try:
             os.remove(pending_path)
         except:
             pass
-        
+
         if result.get('success'):
             flash(f"✅ Version {result['version_number']} uploaded successfully!", "success")
             return redirect(url_for('file_detail', filename=original_filename))
@@ -2072,7 +2135,6 @@ def confirm_version_upload(temp_id, original_filename):
         is_version=True,
         original_filename=original_filename
     )
-
 
 @app.route('/download/version/<document_id>/<int:version_number>')
 def download_version(document_id, version_number):
@@ -2806,7 +2868,11 @@ def company_signup():
                 tenant_id=tenant_id,
                 mfa_enabled=True,
                 dlp_enabled=True,
-                dlp_rule_count=3,
+                dlp_monitor_only=True,  # Default on
+                dlp_notify_user=False,
+                dlp_require_approval=False,
+                dlp_block_action=False,
+                dlp_trigger_incident=False,
                 data_retention_days=365,
                 rls_enabled=True
             )
@@ -2849,16 +2915,15 @@ def company_signup():
 
 @app.route('/tenant/<int:tenant_id>/dashboard')
 def tenant_dashboard(tenant_id):
-    # ✅ TYPE-SAFE CHECK
-    print(f"🔍 DEBUG - session['tenant_id']={repr(session.get('tenant_id'))}, route_tenant_id={tenant_id}, match={str(session.get('tenant_id')) == str(tenant_id)}")
     if str(session.get('tenant_id')) != str(tenant_id):
-        print(f"🚫 ACCESS DENIED: session={session.get('tenant_id')} != route={tenant_id}")
         return redirect(url_for('login'))
 
-    print(f"✅ DASHBOARD OK: tenant_{tenant_id}")
     tenant = Tenant.query.get_or_404(tenant_id)
     stats = get_tenant_stats(tenant_id)
     security_status = get_tenant_security_status(tenant_id)
+
+    # NEW: Instantiate the Add User Form
+    adduser_form = AddTenantUserForm()
 
     return render_template('CompanyAdmin/dashboard.html',
                            tenant=tenant,
@@ -2866,8 +2931,55 @@ def tenant_dashboard(tenant_id):
                            stats=stats,
                            security_status=security_status,
                            company_name=tenant.company_name,
-                           onboarding_date=tenant.created_at.strftime('%d/%m/%Y') if tenant.created_at else 'N/A')
+                           onboarding_date=tenant.created_at.strftime('%d/%m/%Y') if tenant.created_at else 'N/A',
+                           adduser_form=adduser_form)  # <--- Pass form here
 
+
+@app.route('/tenant/<int:tenant_id>/add-user', methods=['POST'])
+@csrf.exempt
+def add_tenant_user(tenant_id):
+    if str(session.get('tenant_id')) != str(tenant_id):
+        return redirect(url_for('login'))
+
+    form = AddTenantUserForm()
+
+    if form.validate_on_submit():
+        email = form.email.data
+        password = form.password.data
+        role = form.role.data
+
+        try:
+            # Hash password
+            password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            schema_name = f"tenant_{tenant_id}"
+
+            # Check existing
+            existing_user = db.session.execute(text(f'SELECT id FROM "{schema_name}".users WHERE email = :email'),
+                                               {'email': email}).fetchone()
+            if existing_user:
+                flash(f"User {email} already exists!", "warning")
+            else:
+                # Insert User
+                db.session.execute(text(f'''
+                    INSERT INTO "{schema_name}".users (email, password_hash, role, created_at)
+                    VALUES (:email, :pwd, :role, NOW())
+                '''), {'email': email, 'pwd': password_hash, 'role': role})
+                db.session.commit()
+
+                log_tenant_event('USER_CREATED', f"Created user: {email}", category='USER_MANAGEMENT',
+                                 tenant_id=tenant_id)
+                flash(f"✅ User {email} added successfully!", "success")
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f"❌ Error: {str(e)}", "danger")
+    else:
+        # Handle Form Errors
+        for field, errors in form.errors.items():
+            for error in errors:
+                flash(f"Error in {field}: {error}", "danger")
+
+    return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
 
 @app.teardown_appcontext
 def close_sessions(exception=None):
@@ -3128,7 +3240,15 @@ def tenant_security_baselines(tenant_id):
             additional_data={
                 'mfa_enabled': tenant_security.mfa_enabled,
                 'dlp_enabled': tenant_security.dlp_enabled,
-                'rls_enabled': tenant_security.rls_enabled  # ✅ FIXED!
+                'rls_enabled': tenant_security.rls_enabled,
+                # NEW: Log specific DLP strategies
+                'dlp_strategies': {
+                    'monitor': tenant_security.dlp_monitor_only,
+                    'notify': tenant_security.dlp_notify_user,
+                    'require_approval': tenant_security.dlp_require_approval,
+                    'block': tenant_security.dlp_block_action,
+                    'incident_response': tenant_security.dlp_trigger_incident
+                }
             }
         )
 
@@ -3136,7 +3256,6 @@ def tenant_security_baselines(tenant_id):
         return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
 
     return render_template('CompanyAdmin/security_baselines.html', form=form, tenant_id=tenant_id)
-
 
 @app.route('/tenant/<int:tenant_id>/backup-recovery', methods=['GET', 'POST'])
 def tenant_backup_recovery(tenant_id):
@@ -3238,21 +3357,23 @@ def backup_delete(tenant_id, filename):
 #TODO tristan stuff -------------------------------------------------------------------------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # Clean up any previous failed transactions
+    # 1. Clean up any previous failed transactions
     try:
         db.session.rollback()
     except:
         pass
-    
+
     form = Loginform()
 
-    if request.method == 'POST' and form.validate_on_submit():
-        email_input = escape(form.email.data)
-        password_input = escape(form.password.data)
+    if form.validate_on_submit():
+        email_input = form.email.data.strip()
+        password_input = form.password.data.strip()
 
         print(f"🔍 Login attempt: {email_input}")
 
-            # ✅ PATH 0: SUPERADMIN (public.superadmins)
+        # ---------------------------------------------------------
+        # ✅ PATH 0: SUPERADMIN (System Level)
+        # ---------------------------------------------------------
         superadmin = authenticate_superadmin(email_input, password_input)
         if superadmin:
             session.clear()
@@ -3267,84 +3388,77 @@ def login():
                 description="System admin logged in successfully",
                 category='AUTHENTICATION',
                 severity="info",
-                ip_address=request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR')),
+                ip_address=request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr),
                 user_agent=request.headers.get('User-Agent')
             )
 
             flash("🛡️ Superadmin access granted", "success")
             return redirect(url_for('superadmincontrolpanel'))
 
-        # ✅ PATH 1: TENANT ADMIN (public.tenants table)
-        tenant_admin = authenticate_tenant_admin(email_input, password_input)
-        if tenant_admin:
-            print(f"✅ TENANT ADMIN LOGIN: tenant_{tenant_admin['tenant_id']}")
+        # ---------------------------------------------------------
+        # ✅ UNIFIED PATH: TENANT USERS & ADMINS
+        # ---------------------------------------------------------
+        # 1. Search for the user across all tenants
+        user_location = find_user_by_email(email_input)
 
-            session['tenant_id'] = int(tenant_admin['tenant_id'])
-            session['tenant_schema'] = tenant_admin['schema_name']
-            session['user_type'] = 'tenant_admin'
-            session['company_name'] = tenant_admin['company_name']
-            session['email'] = email_input
-            session.modified = True
+        if user_location:
+            tenant_id = user_location['tenant_id']
+            print(f"🔍 Found email in tenant_{tenant_id}")
 
-            log_tenant_event(
-                action_type='TENANT_ADMIN_LOGIN_SUCCESS',
-                description=f"Tenant admin login: {email_input}",
-                category='USER_ACTIVITY',
-                tenant_id=tenant_admin['tenant_id']
-            )
+            # 2. Authenticate using the specific tenant's schema
+            # This checks the password and returns the full user object including 'role'
+            auth_result = authenticate_user(tenant_id, email_input, password_input)
 
-            flash(f"✅ Admin login! tenant_{tenant_admin['tenant_id']}", "success")
-            return redirect(url_for('tenant_dashboard', tenant_id=tenant_admin['tenant_id']))
-
-        # ✅ PATH 2: REGULAR USER (tenant_X.users tables) - ROLE AWARE
-        print(f"🔍 Trying user login: {email_input}")
-        user = find_user_by_email(email_input)
-
-        if user:
-            print(f"🔍 Found user in tenant: {user['tenant_id']}")
-            authenticated = authenticate_user(user['tenant_id'], email_input, password_input)
-
-            if authenticated:
-                # ✅ CHECK ROLE FROM tenant_X.users table!
-                user_role = get_user_role(authenticated['tenant_id'], email_input)
-                print(f"🔍 User role: '{user_role}' in tenant_{authenticated['tenant_id']}")
-
-                # Set session
-                session['tenant_id'] = int(authenticated['tenant_id'])
-                session['tenant_schema'] = authenticated['schema_name']
-                session['user_id'] = authenticated['user_id']
-                session['user_type'] = 'tenant_admin' if user_role == 'admin' else 'user'
-                session['email'] = email_input
+            if auth_result:
+                # 3. SUCCESS: Set Session Data
+                session.clear()  # Clear old session data
+                session['user_id'] = auth_result['user_id']
+                session['email'] = auth_result['email']
+                session['tenant_id'] = auth_result['tenant_id']
+                session['tenant_schema'] = auth_result['schema_name']
+                session['user_role'] = auth_result['role']  # 'admin' or 'user'
+                session['user_type'] = 'tenant_admin' if auth_result['role'] == 'admin' else 'user'
+                session['logged_in'] = True
                 session.permanent = True
-                session.modified = True
 
-                log_tenant_event(
-                    action_type='USER_LOGIN_SUCCESS',
-                    description=f"User login: {email_input} (role: {user_role})",
-                    category='USER_ACTIVITY',
-                    tenant_id=authenticated['tenant_id']
-                )
+                # 4. Log the success
+                try:
+                    log_tenant_event(
+                        action_type='LOGIN_SUCCESS',
+                        description=f"User logged in: {email_input} ({auth_result['role']})",
+                        category='AUTHENTICATION',
+                        tenant_id=tenant_id,
+                        user_id=auth_result['user_id']
+                    )
+                except Exception as e:
+                    print(f"Logging failed: {e}")
 
-                # ✅ ROLE-BASED REDIRECT
-                if user_role == 'admin':
-                    flash(f"✅ Admin access granted! tenant_{authenticated['tenant_id']}", "success")
-                    return redirect(url_for('tenant_dashboard', tenant_id=authenticated['tenant_id']))
+                # 5. REDIRECT BASED ON ROLE
+                if auth_result['role'] == 'admin':
+                    flash(f"✅ Welcome Admin! (Tenant {tenant_id})", "success")
+                    return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
                 else:
-                    flash(f"✅ Welcome, {email_input}! tenant_{authenticated['tenant_id']}", "success")
+                    flash(f"✅ Welcome back! (Tenant {tenant_id})", "success")
                     return redirect(url_for('myfiles'))
 
-        # ✅ LOGIN FAILED
-        log_tenant_event(
-            action_type='LOGIN_FAILED',
-            description=f"Login failed: {email_input}",
-            category='USER_ACTIVITY',
-            success=False
-        )
-        flash("❌ Invalid email or password.", "danger")
-        print(f"❌ Login failed: {email_input}")
+            else:
+                # User found, but password incorrect
+                log_tenant_event(
+                    action_type='LOGIN_FAILED',
+                    description=f"Login failed (password): {email_input}",
+                    category='AUTHENTICATION',
+                    success=False,
+                    tenant_id=tenant_id
+                )
+                flash("❌ Invalid email or password.", "danger")
+                print(f"❌ Password mismatch for {email_input}")
+
+        else:
+            # User not found in any tenant
+            flash("❌ Invalid email or password.", "danger")
+            print(f"❌ User not found: {email_input}")
 
     return render_template('login/login_page.html', form=form)
-
 
 @app.route('/logout')
 def logout():

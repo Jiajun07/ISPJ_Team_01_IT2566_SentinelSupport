@@ -24,7 +24,11 @@ class TenantSecurity(db.Model):
     tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), unique=True)
     mfa_enabled = db.Column(db.Boolean, default=False)
     dlp_enabled = db.Column(db.Boolean, default=False)
-    dlp_rule_count = db.Column(db.Integer, default=0)
+    dlp_monitor_only = db.Column(db.Boolean, default=True)
+    dlp_notify_user = db.Column(db.Boolean, default=False)
+    dlp_require_approval = db.Column(db.Boolean, default=False)
+    dlp_block_action = db.Column(db.Boolean, default=False)
+    dlp_trigger_incident = db.Column(db.Boolean, default=False)
     data_retention_days = db.Column(db.Integer, default=365)
     rls_enabled = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))  # ✅

@@ -44,6 +44,17 @@
     <section class="main-stage">
         <div class="confirm-workspace">
             <div class="confirm-body">
+
+                <div id="dlp-status-container" style="margin-bottom: 20px; display: none;">
+                    <div id="dlp-status-alert" style="padding: 15px; border-radius: 6px; display: flex; align-items: center; gap: 15px;">
+                        <div id="dlp-icon" style="font-size: 24px;"></div>
+                        <div>
+                            <strong id="dlp-title" style="display: block; margin-bottom: 4px;"></strong>
+                            <span id="dlp-message" style="font-size: 0.9em;"></span>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="confirm-preview">
                     <div class="confirm-file-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -69,6 +80,7 @@
                     {% if is_version %}
                     <input type="hidden" name="original_filename" value="{{ original_filename }}">
                     {% endif %}
+
                     <div class="form-grid">
                         <label class="form-field">
                             <span class="field-label">File name</span>
@@ -86,9 +98,19 @@
                             <span class="field-label">Notes</span>
                             <input type="text" name="notes" placeholder="Optional notes">
                         </label>
+
+                        <div id="justification-container" style="display: none; grid-column: 1 / -1; margin-top: 10px;">
+                            <label class="form-field" style="width: 100%;">
+                                <span class="field-label" style="color: #f57c00; font-weight: bold;">⚠️ Business Justification Required</span>
+                                <textarea name="justification" id="justification-input" rows="3"
+                                    placeholder="Please explain why you are uploading this sensitive document..."
+                                    style="width: 100%; padding: 10px; border: 1px solid #f57c00; border-radius: 4px;"></textarea>
+                            </label>
+                        </div>
                     </div>
+
                     <div class="confirm-actions">
-                        <button type="submit" class="primary-btn">Confirm Upload</button>
+                        <button type="submit" id="confirm-btn" class="primary-btn">Confirm Upload</button>
                     </div>
                 </form>
             </div>
@@ -100,49 +122,121 @@
     // Get temp_id and tenant from page
     const tempId = "{{ file.temp_id }}";
     const currentTenant = "{{ request.args.get('tenant', '1') }}";
-    
+    const confirmBtn = document.getElementById('confirm-btn');
+    const justificationContainer = document.getElementById('justification-container');
+    const justificationInput = document.getElementById('justification-input');
+    const statusContainer = document.getElementById('dlp-status-container');
+    const statusAlert = document.getElementById('dlp-status-alert');
+    const statusIcon = document.getElementById('dlp-icon');
+    const statusTitle = document.getElementById('dlp-title');
+    const statusMessage = document.getElementById('dlp-message');
+
     // Scan file with DLP on page load
     document.addEventListener('DOMContentLoaded', async () => {
+        // Disable button while scanning
+        confirmBtn.disabled = true;
+        confirmBtn.innerText = "Scanning...";
         await scanFileWithDLP();
     });
-    
+
     async function scanFileWithDLP() {
         try {
             const response = await fetch(`/scan/dlp/${tempId}?tenant=${currentTenant}`);
             const data = await response.json();
-            
+
             if (data.success) {
-                // Update display with sensitivity and risk info
-                document.getElementById('sensitivity-display').textContent = data.sensitivity;
-                document.getElementById('sensitivity-input').value = data.sensitivity;
-                document.getElementById('risk-score-display').textContent = `${data.riskScore}% (${data.riskLevel})`;
-                document.getElementById('risk-type-field').value = data.riskLevel;
-                
-                // Apply visual styling based on risk level
-                const sensitivityDisplay = document.getElementById('sensitivity-display');
-                sensitivityDisplay.style.fontWeight = '600';
-                
-                const riskColors = {
-                    'Restricted': '#d32f2f',
-                    'Confidential': '#f57c00',
-                    'Internal': '#fbc02d',
-                    'Public': '#388e3c'
-                };
-                
-                sensitivityDisplay.style.color = riskColors[data.sensitivity] || '#333';
-                
-                // Update risk score styling
-                const riskScoreDisplay = document.getElementById('risk-score-display');
-                riskScoreDisplay.style.color = riskColors[data.sensitivity] || '#999';
+                updateMetaData(data);
+                handleDlpEnforcement(data);
             } else {
-                document.getElementById('sensitivity-display').textContent = 'Error scanning file';
-                document.getElementById('risk-score-display').textContent = 'Error';
+                showStatus("Error", "Error scanning file", "#f44336", "#ffebee", "❌");
+                confirmBtn.disabled = false;
+                confirmBtn.innerText = "Confirm Upload";
             }
         } catch (error) {
             console.error('DLP scanning error:', error);
-            document.getElementById('sensitivity-display').textContent = 'Error scanning file';
-            document.getElementById('risk-score-display').textContent = 'Error';
+            showStatus("Error", "Connection failed", "#f44336", "#ffebee", "❌");
+            confirmBtn.disabled = false;
+            confirmBtn.innerText = "Confirm Upload";
         }
+    }
+
+    function updateMetaData(data) {
+        // Update display with sensitivity and risk info
+        document.getElementById('sensitivity-display').textContent = data.sensitivity;
+        document.getElementById('sensitivity-input').value = data.sensitivity;
+        document.getElementById('risk-score-display').textContent = `${data.riskScore}% (${data.riskLevel})`;
+        document.getElementById('risk-type-field').value = data.riskLevel;
+
+        // Apply visual styling based on risk level
+        const sensitivityDisplay = document.getElementById('sensitivity-display');
+        sensitivityDisplay.style.fontWeight = '600';
+
+        const riskColors = {
+            'Restricted': '#d32f2f',
+            'Confidential': '#f57c00',
+            'Internal': '#fbc02d',
+            'Public': '#388e3c'
+        };
+
+        sensitivityDisplay.style.color = riskColors[data.sensitivity] || '#333';
+        const riskScoreDisplay = document.getElementById('risk-score-display');
+        riskScoreDisplay.style.color = riskColors[data.sensitivity] || '#999';
+    }
+
+    function handleDlpEnforcement(data) {
+        const action = data.action; // BLOCK, JUSTIFY, WARN, MONITOR
+
+        // Default state
+        confirmBtn.disabled = false;
+        confirmBtn.innerText = "Confirm Upload";
+        justificationContainer.style.display = 'none';
+
+        switch (action) {
+            case "BLOCK":
+                showStatus("Upload Blocked", data.message, "#721c24", "#f8d7da", "⛔");
+                confirmBtn.disabled = true;
+                confirmBtn.innerText = "Upload Blocked by Policy";
+                confirmBtn.style.backgroundColor = "#6c757d";
+                confirmBtn.style.cursor = "not-allowed";
+                break;
+
+            case "JUSTIFY":
+                showStatus("Justification Required", data.message, "#856404", "#fff3cd", "⚠️");
+                // Enable Justification Logic
+                justificationContainer.style.display = 'block';
+                justificationInput.required = true;
+                confirmBtn.disabled = true; // Disabled until typed
+
+                justificationInput.addEventListener('input', function() {
+                    if (this.value.trim().length > 0) {
+                        confirmBtn.disabled = false;
+                    } else {
+                        confirmBtn.disabled = true;
+                    }
+                });
+                break;
+
+            case "WARN":
+                showStatus("Warning", data.message, "#856404", "#fff3cd", "🛡️");
+                break;
+
+            case "MONITOR":
+            default:
+                // Optional: Show success message or hide completely
+                // showStatus("Scan Complete", data.message, "#155724", "#d4edda", "✅");
+                statusContainer.style.display = 'none';
+                break;
+        }
+    }
+
+    function showStatus(title, message, color, bgColor, icon) {
+        statusContainer.style.display = 'block';
+        statusAlert.style.backgroundColor = bgColor;
+        statusAlert.style.color = color;
+        statusAlert.style.border = `1px solid ${color}`;
+        statusTitle.textContent = title;
+        statusMessage.textContent = message;
+        statusIcon.textContent = icon;
     }
 </script>
 

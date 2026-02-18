@@ -41,6 +41,21 @@ class SignUpForm(FlaskForm):
     tenant_id = SelectField('Company', coerce=int, validators=[DataRequired()])
     submit = SubmitField('Sign Up')
 
+class AddTenantUserForm(FlaskForm):
+    email = StringField('Email Address', validators=[
+        DataRequired(message="Email is required"),
+        Email(message="Invalid email address")
+    ])
+    password = PasswordField('Password', validators=[
+        DataRequired(message="Password is required"),
+        Length(min=6, message="Password must be at least 6 characters")
+    ])
+    role = SelectField('Role', choices=[
+        ('user', 'User (Standard)'),
+        ('admin', 'Admin (Full Access)')
+    ], default='user')
+    submit = SubmitField('Create User')
+
 class TwoFactorForm(FlaskForm):
     code = StringField('Verification Code', validators=[
         DataRequired(message="Enter 6-digit code"),
@@ -61,7 +76,11 @@ class CompanySignupForm(FlaskForm):
 class SecurityBaselineForm(FlaskForm):
     mfa_enabled = BooleanField('Enable MFA')
     dlp_enabled = BooleanField('Enable DLP')
-    dlp_rule_count = IntegerField('DLP Rules Count', validators=[NumberRange(min=0, max=100)])
+    dlp_monitor_only = BooleanField('Monitor only (Log event, show nothing)')
+    dlp_notify_user = BooleanField('Notify user (Show inline warning)')
+    dlp_require_approval = BooleanField('Require justification / approval')
+    dlp_block_action = BooleanField('Block with explanation')
+    dlp_trigger_incident = BooleanField('Trigger incident response')
     data_retention_days = IntegerField('Data Retention (days)', validators=[NumberRange(min=30, max=3650)])
     rls_enabled = BooleanField('Enable RLS (Row Level Security)', default=True)
     submit = SubmitField('Apply Security Baselines')

@@ -2,7 +2,6 @@
 
 {% block content %}
 <div class="admin-dashboard">
-    <!-- Top Navigation -->
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div class="page-title">
             <h1 class="h3 mb-0 fw-bold text-white">Welcome, {{ session.username }}</h1>
@@ -13,9 +12,7 @@
         </div>
     </div>
 
-    <!-- Main Content -->
     <div class="row g-4">
-        <!-- Workspace Card - DYNAMIC DATA ✅ -->
         <div class="col-lg-8">
             <div class="workspace-card card border-0 shadow-lg h-100">
                 <div class="card-body p-4">
@@ -64,7 +61,6 @@
             </div>
         </div>
 
-        <!-- Security Baselines Card - DYNAMIC ✅ -->
         <div class="col-lg-4">
             <div class="security-card card border-0 shadow-lg h-100">
                 <div class="card-body p-4">
@@ -74,8 +70,7 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span>MFA</span>
                             <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" {% if security_status.mfa_enabled
-                                    %}checked{% endif %}>
+                                <input class="form-check-input" type="checkbox" {% if security_status.mfa_enabled %}checked{% endif %}>
                             </div>
                         </div>
                     </div>
@@ -86,8 +81,7 @@
                             <span class="badge bg-success">{{ security_status.dlp_rule_count }} Rules</span>
                         </div>
                         <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" {% if security_status.dlp_enabled
-                                %}checked{% endif %}>
+                            <input class="form-check-input" type="checkbox" {% if security_status.dlp_enabled %}checked{% endif %}>
                         </div>
                     </div>
 
@@ -101,10 +95,8 @@
                         </div>
                     </div>
 
-                    <!-- ✅ LINK TO YOUR SECURITY FORM -->
                     <div class="mt-4">
-                        <a href="{{ url_for('tenant_security_baselines', tenant_id=tenant_id) }}"
-                            class="btn btn-primary w-100">
+                        <a href="{{ url_for('tenant_security_baselines', tenant_id=tenant_id) }}" class="btn btn-primary w-100">
                             <i class="fas fa-edit me-2"></i>Edit Security Baselines
                         </a>
                     </div>
@@ -113,7 +105,6 @@
         </div>
     </div>
 
-    <!-- Stats Cards -->
     <div class="row g-4 mt-4">
         <div class="col-md-3">
             <div class="stat-card card border-0 shadow-lg text-center p-4">
@@ -122,6 +113,7 @@
                 <p class="text-muted mb-0">Users</p>
             </div>
         </div>
+
         <div class="col-md-3">
             <div class="stat-card card border-0 shadow-lg text-center p-4">
                 <i class="fas fa-file-alt fa-3x text-success mb-3"></i>
@@ -129,9 +121,20 @@
                 <p class="text-muted mb-0">Documents</p>
             </div>
         </div>
+
+        <div class="col-md-3">
+            <div class="stat-card card border-0 shadow-lg text-center p-4 h-100 d-flex flex-column justify-content-center align-items-center"
+                 style="cursor: pointer; border: 2px dashed rgba(255,255,255,0.3) !important;"
+                 data-bs-toggle="modal" data-bs-target="#addUserModal">
+                <div class="rounded-circle bg-success p-3 mb-3 d-inline-flex">
+                    <i class="fas fa-user-plus fa-2x text-white"></i>
+                </div>
+                <h5 class="fw-bold text-white">Add Employee</h5>
+                <p class="text-white-50 small mb-0">Create new user account</p>
+            </div>
+        </div>
     </div>
 
-    <!-- Add to your stats cards section -->
     <div class="row g-4 mt-4">
         <div class="col-md-3">
             <div class="stat-card card border-0 shadow-lg text-center p-4">
@@ -145,7 +148,6 @@
             </div>
         </div>
 
-        <!-- Compliance Report Generator. IF IT BREAKS, call Gavier -->
         {% if session.user_type in ['tenant_admin', 'system_admin'] %}
         <div class="col-md-3">
             <div class="stat-card card border-0 shadow-lg text-center p-4">
@@ -159,7 +161,6 @@
         </div>
         {% endif %}
 
-        <!-- Audit Log Route. IF IT BREAKS, call Gavier -->
         {% if session.user_type in ['tenant_admin', 'system_admin'] %}
         <div class="col-md-3">
             <div class="stat-card card border-0 shadow-lg text-center p-4">
@@ -175,7 +176,41 @@
     </div>
 </div>
 
-<!-- Keep your existing CSS + Chart.js script -->
+<div class="modal fade" id="addUserModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark text-white border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title fw-bold"><i class="fas fa-user-plus me-2 text-success"></i>Add New Employee</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+
+            <form action="{{ url_for('add_tenant_user', tenant_id=tenant_id) }}" method="POST">
+                {{ adduser_form.hidden_tag() }} <div class="modal-body">
+                    <div class="mb-3">
+                        {{ adduser_form.email.label(class="form-label text-white-50") }}
+                        {{ adduser_form.email(class="form-control bg-secondary text-white border-0", placeholder="employee@company.com") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ adduser_form.password.label(class="form-label text-white-50") }}
+                        {{ adduser_form.password(class="form-control bg-secondary text-white border-0", placeholder="Set temporary password") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ adduser_form.role.label(class="form-label text-white-50") }}
+                        {{ adduser_form.role(class="form-select bg-secondary text-white border-0") }}
+                    </div>
+                </div>
+
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Cancel</button>
+                    {{ adduser_form.submit(class="btn btn-success fw-bold") }}
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <style>
     .admin-dashboard {
         background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);

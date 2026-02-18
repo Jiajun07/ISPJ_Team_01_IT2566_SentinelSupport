@@ -15,52 +15,85 @@
 
                         <div class="row g-4 mb-4">
                             <div class="col-md-6">
-                                <div class="form-check form-switch">
+                                <div class="form-check form-switch p-3 bg-light rounded border">
                                     {{ form.mfa_enabled(class="form-check-input", id="mfa") }}
                                     <label class="form-check-label fw-semibold" for="mfa">
                                         <i class="fas fa-mobile-alt me-2 text-success"></i>
-                                        Enable Multi-Factor Authentication
+                                        Enable MFA
                                     </label>
                                 </div>
                             </div>
                             <div class="col-md-6">
-                                <div class="form-check form-switch">
+                                <div class="form-check form-switch p-3 bg-light rounded border">
                                     {{ form.dlp_enabled(class="form-check-input", id="dlp") }}
                                     <label class="form-check-label fw-semibold" for="dlp">
                                         <i class="fas fa-filter me-2 text-warning"></i>
-                                        Enable Data Loss Prevention
+                                        Enable DLP Scanner
                                     </label>
                                 </div>
                             </div>
                         </div>
 
-                        <div class="row g-4 mb-4">
-                            <div class="col-md-6">
-                                {{ form.dlp_rule_count.label(class="form-label fw-semibold") }}  <!-- ✅ FIXED -->
-                                {{ form.dlp_rule_count(class="form-control", placeholder="3") }}
-                                <small class="form-text text-muted">Number of DLP classification rules</small>
-                            </div>
-                            <div class="col-md-6">
-                                {{ form.data_retention_days.label(class="form-label fw-semibold") }}  <!-- ✅ FIXED -->
-                                {{ form.data_retention_days(class="form-control", placeholder="365") }}
-                                <small class="form-text text-muted">Days before data auto-deletion</small>
+                        <div class="mb-4">
+                            {{ form.data_retention_days.label(class="form-label fw-semibold") }}
+                            {{ form.data_retention_days(class="form-control", placeholder="365") }}
+                            <small class="form-text text-muted">Days before data auto-deletion</small>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="form-label fw-bold"><i class="fas fa-gavel me-2"></i>DLP Enforcement Actions</label>
+                            <div class="card bg-light border-0">
+                                <div class="card-body">
+                                    <div class="form-check mb-2">
+                                        {{ form.dlp_monitor_only(class="form-check-input") }}
+                                        <label class="form-check-label" for="dlp_monitor_only">
+                                            <strong>Monitor only</strong> <span class="text-muted small">- Log the event, show nothing to the user (for tuning & low-risk data).</span>
+                                        </label>
+                                    </div>
+
+                                    <div class="form-check mb-2">
+                                        {{ form.dlp_notify_user(class="form-check-input") }}
+                                        <label class="form-check-label" for="dlp_notify_user">
+                                            <strong>Notify user</strong> <span class="text-muted small">- Show inline warning "This action involves sensitive data; proceed only if necessary."</span>
+                                        </label>
+                                    </div>
+
+                                    <div class="form-check mb-2">
+                                        {{ form.dlp_require_approval(class="form-check-input") }}
+                                        <label class="form-check-label" for="dlp_require_approval">
+                                            <strong>Require justification</strong> <span class="text-muted small">- Allow action only if user provides business justification.</span>
+                                        </label>
+                                    </div>
+
+                                    <div class="form-check mb-2">
+                                        {{ form.dlp_block_action(class="form-check-input") }}
+                                        <label class="form-check-label" for="dlp_block_action">
+                                            <strong>Block with explanation</strong> <span class="text-muted small">- Hard-block action and tell the user which policy was violated.</span>
+                                        </label>
+                                    </div>
+
+                                    <div class="form-check">
+                                        {{ form.dlp_trigger_incident(class="form-check-input") }}
+                                        <label class="form-check-label text-danger fw-bold" for="dlp_trigger_incident">
+                                            Trigger incident response <span class="text-muted small fw-normal">- Create audit event, alert security, and tag user as high-risk.</span>
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
-
-                        <div class="form-check mb-4">
-                            {{ form.rls_enabled(class="form-check-input", id="rls") }}  <!-- ✅ FIXED -->
+                        <div class="form-check mb-4 p-3 border rounded bg-white">
+                            {{ form.rls_enabled(class="form-check-input", id="rls") }}
                             <label class="form-check-label fw-semibold" for="rls">
                                 <i class="fas fa-lock me-2 text-danger"></i>
                                 Enable Row Level Security (RLS)
                             </label>
-                            <div class="form-text">
-                                <strong>Recommended:</strong> Prevents cross-user data access within tenant
+                            <div class="form-text ms-4">
+                                <strong>Recommended:</strong> Prevents cross-user data access within tenant at the database level.
                             </div>
                         </div>
 
-
-                        <button type="submit" class="btn btn-success btn-lg px-5 py-3 fw-bold w-100">
+                        <button type="submit" class="btn btn-success btn-lg px-5 py-3 fw-bold w-100 shadow-sm">
                             <i class="fas fa-check-circle me-2"></i>
                             Apply Security Baselines
                         </button>
