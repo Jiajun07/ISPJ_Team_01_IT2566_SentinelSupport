@@ -27,7 +27,7 @@
     function maskIP(ip) {
         if (!ip || ip === '-' || !ip.match(/^\d+\.\d+\.\d+\.\d+$/)) return ip;
         const parts = ip.split('.');
-        return parts[0] + '.' + parts[1] + '.***.***.***';
+        return parts[0] + '.' + parts[1] + '.***.***';
     }
 
     function maskUserID(id) {

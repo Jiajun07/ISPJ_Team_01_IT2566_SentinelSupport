@@ -30,11 +30,19 @@
     <div class="d-flex align-items-center w-100">
         <div>
             <h2 class="mb-1">Compliance Dashboard</h2>
-            <p class="text-muted mb-0">{{ scope }} - Role: {{ user_role }}</p>
         </div>
         {% if session.user_type in ['tenant_admin'] %}
         <div class="ms-auto">
             <a href="{{ url_for('tenant_dashboard', tenant_id=session.tenant_id) }}" class="btn btn-primary btn-lg"
+                id="backButton">
+                <i class="fas fa-arrow-left me-2"></i>
+                Back to Dashboard
+            </a>
+        </div>
+        {% endif %}
+        {% if session.user_type in ['superadmin'] %}
+        <div class="ms-auto">
+            <a href="{{ url_for('system_dashboard') }}" class="btn btn-primary btn-lg"
                 id="backButton">
                 <i class="fas fa-arrow-left me-2"></i>
                 Back to Dashboard
@@ -213,12 +221,6 @@
         padding: 2px 4px;
         border-radius: 3px;
         font-size: 0.9em;
-    }
-
-    .masked-email::after {
-        content: " 🔒";
-        font-size: 0.8em;
-        opacity: 0.5;
     }
 
     .sensitive-info {

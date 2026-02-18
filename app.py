@@ -606,7 +606,7 @@ def myfiles():
     #log audit event
     log_audit_event(
         action_type='FILE_LIST_ACCESS',
-        description=f"User accessed file list (tenant_{tenant_id})",
+        description=f"User accessed file list",
         category='FILE_MANAGEMENT',
         target_resource='FILE_LIST',
         additional_data={'file_count': len(files)}
@@ -4957,6 +4957,7 @@ def dashboard_data():
                 'total_events_today': len([e for e in real_events if datetime.now().date().strftime('%Y-%m-%d') in e['timestamp']])
             }
         })
+
 
 if __name__ == "__main__":
 # Just comment if it doesnt work
