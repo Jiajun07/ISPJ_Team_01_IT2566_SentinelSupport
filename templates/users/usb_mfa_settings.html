@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+
+{% block title %}USB MFA Settings{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <h1>🔐 USB MFA Settings</h1>
+    <p class="text-muted">Enhance your account security with a physical USB thumbdrive as a second factor of authentication.</p>
+    
+    <div class="row mt-4">
+        <div class="col-md-8">
+            <!-- Current Status -->
+            <div class="card mb-4">
+                <div class="card-header bg-info text-white">
+                    <h5 class="card-title mb-0">Current Status</h5>
+                </div>
+                <div class="card-body">
+                    <div id="mfa-status">
+                        <p>Loading status...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- How It Works -->
+            <div class="card mb-4">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="card-title mb-0">How USB MFA Works</h5>
+                </div>
+                <div class="card-body">
+                    <ol>
+                        <li><strong>Generate Key:</strong> Click "Generate MFA Key" to create a unique key file</li>
+                        <li><strong>Download File:</strong> Download the <code>mfa_key.json</code> file</li>
+                        <li><strong>Save to USB:</strong> Copy the file to the root of your USB thumbdrive</li>
+                        <li><strong>Enable MFA:</strong> Click "Enable USB MFA" to activate</li>
+                        <li><strong>Login:</strong> Insert USB during login - authentication will be automatic!</li>
+                    </ol>
+                    <div class="alert alert-warning mt-3">
+                        <strong>⚠️ Important:</strong> Keep your USB drive safe! If lost, you can regenerate a key, but your old one will be invalidated.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Setup Section -->
+            <div class="card mb-4">
+                <div class="card-header bg-success text-white">
+                    <h5 class="card-title mb-0">Setup USB MFA</h5>
+                </div>
+                <div class="card-body">
+                    <div class="btn-group mb-3" role="group">
+                        <button type="button" class="btn btn-primary" id="generate-btn" onclick="generateUSBMFA()">
+                            📝 Generate MFA Key
+                        </button>
+                        <button type="button" class="btn btn-success" id="download-btn" onclick="downloadUSBMFA()" disabled>
+                            💾 Download mfa_key.json
+                        </button>
+                        <button type="button" class="btn btn-info" id="preview-btn" onclick="toggleKeyPreview()" disabled>
+                            👁️ Preview Key
+                        </button>
+                    </div>
+                    
+                    <!-- Key Preview (Hidden by default) -->
+                    <div id="key-preview" style="display: none;" class="mb-3">
+                        <div class="alert alert-info">
+                            <h6>Generated MFA Key (JSON)</h6>
+                            <pre id="key-preview-content" style="max-height: 300px; overflow: auto;"></pre>
+                            <small class="text-muted">This is what will be stored on your USB. Keep it safe!</small>
+                        </div>
+                    </div>
+                    
+                    <div id="generate-status"></div>
+                </div>
+            </div>
+
+            <!-- Enable/Disable Section -->
+            <div class="card">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="card-title mb-0">Activate USB MFA</h5>
+                </div>
+                <div class="card-body">
+                    <p>Once you have downloaded your key file and saved it to your USB:</p>
+                    <button type="button" class="btn btn-success btn-lg" id="enable-btn" onclick="enableUSBMFA()" disabled>
+                        ✅ Enable USB MFA
+                    </button>
+                    <button type="button" class="btn btn-danger btn-lg" id="disable-btn" onclick="disableUSBMFA()" style="display: none;">
+                        ❌ Disable USB MFA
+                    </button>
+                    <div id="enable-status" class="mt-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar Info -->
+        <div class="col-md-4">
+            <div class="card bg-light">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Security Benefits</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="list-unstyled">
+                        <li>✅ Physical 2FA protection</li>
+                        <li>✅ Immune to phishing</li>
+                        <li>✅ Works offline</li>
+                        <li>✅ No codes to remember</li>
+                        <li>✅ Hardware-based security</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="card bg-light mt-3">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Fallback Option</h5>
+                </div>
+                <div class="card-body">
+                    <p>If your USB is not detected:</p>
+                    <p class="mb-0">You can still login using email 2FA</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let generatedKey = null;
+
+// Load status on page load
+document.addEventListener('DOMContentLoaded', function() {
+    getUSBMFAStatus();
+});
+
+function getUSBMFAStatus() {
+    fetch('/settings/usb-mfa/status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const isEnabled = data.usb_mfa_enabled;
+                const statusDiv = document.getElementById('mfa-status');
+                
+                if (isEnabled) {
+                    statusDiv.innerHTML = '<div class="alert alert-success"><strong>✅ USB MFA is ENABLED</strong><br>Your USB device will be checked during login.</div>';
+                    document.getElementById('generate-btn').disabled = false;
+                    document.getElementById('download-btn').disabled = false;
+                    document.getElementById('preview-btn').disabled = false;
+                    document.getElementById('enable-btn').style.display = 'none';
+                    document.getElementById('disable-btn').style.display = 'inline-block';
+                } else {
+                    statusDiv.innerHTML = '<div class="alert alert-warning"><strong>⚠️ USB MFA is DISABLED</strong><br>Complete the setup steps below to enable.</div>';
+                    document.getElementById('generate-btn').disabled = false;
+                    document.getElementById('enable-btn').style.display = 'inline-block';
+                    document.getElementById('disable-btn').style.display = 'none';
+                }
+            }
+        });
+}
+
+function generateUSBMFA() {
+    const btn = document.getElementById('generate-btn');
+    const statusDiv = document.getElementById('generate-status');
+    
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Generating...';
+    statusDiv.innerHTML = '';
+    
+    fetch('/settings/usb-mfa/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            generatedKey = data.key_data;
+            statusDiv.innerHTML = '<div class="alert alert-success">✅ MFA key generated successfully!</div>';
+            
+            document.getElementById('download-btn').disabled = false;
+            document.getElementById('preview-btn').disabled = false;
+            document.getElementById('enable-btn').disabled = false;
+            
+            btn.innerHTML = '📝 Generate MFA Key';
+            btn.disabled = false;
+        } else {
+            statusDiv.innerHTML = `<div class="alert alert-danger">❌ Error: ${data.message}</div>`;
+            btn.innerHTML = '📝 Generate MFA Key';
+            btn.disabled = false;
+        }
+    })
+    .catch(error => {
+        statusDiv.innerHTML = `<div class="alert alert-danger">❌ Error: ${error.message}</div>`;
+        btn.innerHTML = '📝 Generate MFA Key';
+        btn.disabled = false;
+    });
+}
+
+function downloadUSBMFA() {
+    fetch('/settings/usb-mfa/download')
+        .then(response => response.blob())
+        .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'mfa_key.json';
+            a.click();
+            window.URL.revokeObjectURL(url);
+        });
+}
+
+function toggleKeyPreview() {
+    const previewDiv = document.getElementById('key-preview');
+    if (previewDiv.style.display === 'none') {
+        previewDiv.style.display = 'block';
+        if (generatedKey) {
+            document.getElementById('key-preview-content').textContent = JSON.stringify(generatedKey, null, 2);
+        }
+    } else {
+        previewDiv.style.display = 'none';
+    }
+}
+
+function enableUSBMFA() {
+    const btn = document.getElementById('enable-btn');
+    const statusDiv = document.getElementById('enable-status');
+    
+    if (!generatedKey) {
+        statusDiv.innerHTML = '<div class="alert alert-danger">❌ Generate and download key first!</div>';
+        return;
+    }
+    
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Enabling...';
+    statusDiv.innerHTML = '';
+    
+    fetch('/settings/usb-mfa/enable', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            statusDiv.innerHTML = '<div class="alert alert-success">✅ USB MFA enabled! Insert your USB at next login.</div>';
+            document.getElementById('enable-btn').style.display = 'none';
+            document.getElementById('disable-btn').style.display = 'inline-block';
+            getUSBMFAStatus();
+        } else {
+            statusDiv.innerHTML = `<div class="alert alert-danger">❌ Error: ${data.message}</div>`;
+            btn.disabled = false;
+            btn.innerHTML = '✅ Enable USB MFA';
+        }
+    });
+}
+
+function disableUSBMFA() {
+    if (!confirm('Are you sure? You will need to use email 2FA for login.')) {
+        return;
+    }
+    
+    const btn = document.getElementById('disable-btn');
+    const statusDiv = document.getElementById('enable-status');
+    
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Disabling...';
+    statusDiv.innerHTML = '';
+    
+    fetch('/settings/usb-mfa/disable', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            statusDiv.innerHTML = '<div class="alert alert-info">✅ USB MFA disabled</div>';
+            document.getElementById('disable-btn').style.display = 'none';
+            document.getElementById('enable-btn').style.display = 'inline-block';
+            getUSBMFAStatus();
+        } else {
+            statusDiv.innerHTML = `<div class="alert alert-danger">❌ Error: ${data.message}</div>`;
+            btn.disabled = false;
+            btn.innerHTML = '❌ Disable USB MFA';
+        }
+    });
+}
+</script>
+
+<style>
+    pre {
+        background-color: #f5f5f5;
+        padding: 15px;
+        border-radius: 4px;
+        border-left: 4px solid #007bff;
+    }
+    
+    .card {
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border: none;
+    }
+    
+    .card-header {
+        font-weight: 600;
+        border-bottom: 2px solid rgba(0,0,0,0.1);
+    }
+</style>
+{% endblock %}

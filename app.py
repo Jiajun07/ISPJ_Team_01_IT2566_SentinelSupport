@@ -2682,6 +2682,7 @@ def company_signup():
                     email VARCHAR(255) UNIQUE NOT NULL,
                     password_hash VARCHAR(255) NOT NULL,
                     role VARCHAR(50) NOT NULL DEFAULT 'user',
+                    usb_mfa_enabled BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             '''))
@@ -3410,36 +3411,56 @@ def login():
             auth_result = authenticate_user(tenant_id, email_input, password_input)
 
             if auth_result:
-                # 3. SUCCESS: Set Session Data
-                session.clear()  # Clear old session data
-                session['user_id'] = auth_result['user_id']
-                session['email'] = auth_result['email']
-                session['tenant_id'] = auth_result['tenant_id']
-                session['tenant_schema'] = auth_result['schema_name']
-                session['user_role'] = auth_result['role']  # 'admin' or 'user'
-                session['user_type'] = 'tenant_admin' if auth_result['role'] == 'admin' else 'user'
-                session['logged_in'] = True
-                session.permanent = True
+                # 3. Check for USB MFA
+                from usb_mfa import USBMFAManager
+                
+                usb_mfa_valid = USBMFAManager.find_and_validate_usb_mfa(
+                    auth_result['user_id'],
+                    tenant_id,
+                    email_input
+                )
+                
+                if usb_mfa_valid:
+                    # 🔥 USB MFA validated - proceed with full login
+                    session.clear()
+                    session['user_id'] = auth_result['user_id']
+                    session['email'] = auth_result['email']
+                    session['tenant_id'] = auth_result['tenant_id']
+                    session['tenant_schema'] = auth_result['schema_name']
+                    session['user_role'] = auth_result['role']
+                    session['user_type'] = 'tenant_admin' if auth_result['role'] == 'admin' else 'user'
+                    session['logged_in'] = True
+                    session.permanent = True
 
-                # 4. Log the success
-                try:
                     log_tenant_event(
-                        action_type='LOGIN_SUCCESS',
-                        description=f"User logged in: {email_input} ({auth_result['role']})",
+                        action_type='LOGIN_SUCCESS_USB_MFA',
+                        description=f"User logged in via USB MFA: {email_input} ({auth_result['role']})",
                         category='AUTHENTICATION',
                         tenant_id=tenant_id,
                         user_id=auth_result['user_id']
                     )
-                except Exception as e:
-                    print(f"Logging failed: {e}")
 
-                # 5. REDIRECT BASED ON ROLE
-                if auth_result['role'] == 'admin':
-                    flash(f"✅ Welcome Admin! (Tenant {tenant_id})", "success")
-                    return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+                    if auth_result['role'] == 'admin':
+                        flash(f"✅ Welcome Admin! USB MFA verified (Tenant {tenant_id})", "success")
+                        return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+                    else:
+                        flash(f"✅ Welcome back! USB MFA verified (Tenant {tenant_id})", "success")
+                        return redirect(url_for('myfiles'))
                 else:
-                    flash(f"✅ Welcome back! (Tenant {tenant_id})", "success")
-                    return redirect(url_for('myfiles'))
+                    # USB MFA not detected, fall back to email 2FA
+                    print(f"🔄 No USB MFA found, falling back to email 2FA for {email_input}")
+                    session.clear()
+                    session['temp_user_email'] = email_input
+                    session['temp_user_id'] = auth_result['user_id']
+                    session['temp_tenant_id'] = tenant_id
+                    session['tenant_id'] = tenant_id
+                    session['user_type'] = 'tenant_admin' if auth_result['role'] == 'admin' else 'user'
+                    session['needs_2fa'] = True
+                    session.permanent = True
+                    
+                    send_2fa_email(email_input)
+                    flash("🔑 USB MFA not detected. Enter 2FA code from your email.", "info")
+                    return redirect(url_for('verify_2fa'))
 
             else:
                 # User found, but password incorrect
@@ -3459,6 +3480,209 @@ def login():
             print(f"❌ User not found: {email_input}")
 
     return render_template('login/login_page.html', form=form)
+
+
+# ==================== USB MFA MANAGEMENT ROUTES ====================
+
+@app.route('/settings/usb-mfa/generate', methods=['POST'])
+@csrf.exempt
+def generate_usb_mfa():
+    """Generate and download MFA key file for USB"""
+    if not session.get('logged_in'):
+        return jsonify({'success': False, 'message': 'Not logged in'}), 401
+    
+    tenant_id = session.get('tenant_id')
+    user_id = session.get('user_id')
+    email = session.get('email')
+    
+    try:
+        from usb_mfa import USBMFAManager, create_mfa_key_file
+        import tempfile
+        
+        # Generate key
+        manager = USBMFAManager()
+        key_info = manager.generate_mfa_key(user_id, tenant_id, email)
+        
+        # Store in session for download
+        session['usb_mfa_key'] = key_info['key_data']
+        session['usb_mfa_hash'] = key_info['key_hash']
+        
+        log_tenant_event(
+            action_type='USB_MFA_KEY_GENERATED',
+            description=f"USB MFA key generated for user {email}",
+            category='SECURITY',
+            tenant_id=tenant_id,
+            user_id=user_id
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': 'USB MFA key generated. Ready to download.',
+            'key_data': key_info['key_data']
+        }), 200
+    
+    except Exception as e:
+        print(f"❌ Error generating USB MFA key: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/settings/usb-mfa/download', methods=['GET'])
+def download_usb_mfa_key():
+    """Download the MFA key file to put on USB"""
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    
+    try:
+        from io import BytesIO
+        import json
+        
+        key_data = session.get('usb_mfa_key')
+        if not key_data:
+            flash("❌ No MFA key in session. Generate one first.", "danger")
+            return redirect(url_for('myfiles'))
+        
+        # Create file content
+        file_content = json.dumps(key_data, indent=2).encode('utf-8')
+        file_obj = BytesIO(file_content)
+        
+        # Generate filename with timestamp to support multiple downloads
+        # Format: mfa_key_YYYYMMDD_HHMMSS.json
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        download_filename = f'mfa_key_{timestamp}.json'
+        
+        return send_file(
+            file_obj,
+            mimetype='application/json',
+            as_attachment=True,
+            download_name=download_filename
+        )
+    
+    except Exception as e:
+        print(f"❌ Error downloading MFA key: {e}")
+        flash(f"❌ Download error: {str(e)}", "danger")
+        return redirect(url_for('myfiles'))
+
+
+@app.route('/settings/usb-mfa/enable', methods=['POST'])
+@csrf.exempt
+def enable_usb_mfa():
+    """Enable USB MFA for current user"""
+    if not session.get('logged_in'):
+        return jsonify({'success': False, 'message': 'Not logged in'}), 401
+    
+    tenant_id = session.get('tenant_id')
+    user_id = session.get('user_id')
+    email = session.get('email')
+    
+    try:
+        schema_name = f"tenant_{tenant_id}"
+        
+        # Update user record to enable USB MFA
+        db.session.execute(text(f'''
+            UPDATE "{schema_name}".users
+            SET usb_mfa_enabled = TRUE
+            WHERE id = :user_id
+        '''), {'user_id': user_id})
+        
+        db.session.commit()
+        
+        log_tenant_event(
+            action_type='USB_MFA_ENABLED',
+            description=f"USB MFA enabled for user {email}",
+            category='SECURITY',
+            tenant_id=tenant_id,
+            user_id=user_id
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': '✅ USB MFA enabled successfully'
+        }), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Error enabling USB MFA: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/settings/usb-mfa/disable', methods=['POST'])
+@csrf.exempt
+def disable_usb_mfa():
+    """Disable USB MFA for current user"""
+    if not session.get('logged_in'):
+        return jsonify({'success': False, 'message': 'Not logged in'}), 401
+    
+    tenant_id = session.get('tenant_id')
+    user_id = session.get('user_id')
+    email = session.get('email')
+    
+    try:
+        schema_name = f"tenant_{tenant_id}"
+        
+        # Update user record to disable USB MFA
+        db.session.execute(text(f'''
+            UPDATE "{schema_name}".users
+            SET usb_mfa_enabled = FALSE
+            WHERE id = :user_id
+        '''), {'user_id': user_id})
+        
+        db.session.commit()
+        
+        log_tenant_event(
+            action_type='USB_MFA_DISABLED',
+            description=f"USB MFA disabled for user {email}",
+            category='SECURITY',
+            tenant_id=tenant_id,
+            user_id=user_id
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': '✅ USB MFA disabled'
+        }), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Error disabling USB MFA: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/settings/usb-mfa/status', methods=['GET'])
+def get_usb_mfa_status():
+    """Get current USB MFA status for user"""
+    if not session.get('logged_in'):
+        return jsonify({'success': False, 'message': 'Not logged in'}), 401
+    
+    tenant_id = session.get('tenant_id')
+    user_id = session.get('user_id')
+    
+    try:
+        schema_name = f"tenant_{tenant_id}"
+        
+        result = db.session.execute(text(f'''
+            SELECT usb_mfa_enabled FROM "{schema_name}".users WHERE id = :user_id
+        '''), {'user_id': user_id}).fetchone()
+        
+        usb_mfa_enabled = result[0] if result else False
+        
+        return jsonify({
+            'success': True,
+            'usb_mfa_enabled': usb_mfa_enabled
+        }), 200
+    
+    except Exception as e:
+        print(f"❌ Error getting USB MFA status: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/settings/usb-mfa', methods=['GET'])
+def usb_mfa_settings():
+    """USB MFA settings page"""
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    
+    return render_template('users/usb_mfa_settings.html')
+
 
 @app.route('/logout')
 def logout():
@@ -3679,11 +3903,23 @@ def verify_2fa():
 
         if validate_2fa_code_format(code) and code == session.get('2fa_code'):
             # ✅ LOGIN SUCCESS - Route by user_type
+            tenant_id = session.get('tenant_id')
+            
+            if not tenant_id:
+                flash("❌ Session error: No tenant ID found. Please log in again.", "danger")
+                return redirect(url_for('login'))
+            
+            # Mark user as logged in
+            session['logged_in'] = True
+            
+            # 🔥 Critical: Set email and user_id for post-login operations (USB MFA, settings, etc.)
+            session['email'] = email
+            session['user_id'] = session.get('temp_user_id')
+            
             if session.get('user_type') == 'tenant_admin':
                 # Tenant admin → Company dashboard
 
                 # For Audit Log Entry ====================
-                tenant_id = session['tenant_id']
                 SysLogService.logTenantEvent(
                     tenant_id=tenant_id,
                     action_type='TENANT_USER_LOGIN',
@@ -3694,19 +3930,21 @@ def verify_2fa():
                 #=============================================
                 
 
-                return redirect(url_for('tenant_dashboard', tenant_id=session['tenant_id']))
+                return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
             else:
-                # Regular user → Their dashboard
+                # Regular user → My Files page
 
                 # Audit Log Entry ============================
-                SysLogService.logSystemAdminEvent(
-                    action_type='SYSTEM_ADMIN_LOGIN',
-                    description=f"System admin login successful for {email}",
-                    admin_email=email
+                SysLogService.logTenantEvent(
+                    tenant_id=tenant_id,
+                    action_type='TENANT_USER_LOGIN',
+                    description=f"Tenant user login successful for {email}",
+                    admin_email=email,
+                    category='USER_ACTIVITY'
                 )
                 #=============================================
 
-                return redirect(url_for('dashboard'))  # Your existing dashboard
+                return redirect(url_for('myfiles'))
         # Audit Log Entry ============================
         if session.get('user_type') == 'tenant_admin':
             SysLogService.logTenantEvent(
