@@ -39,21 +39,6 @@
                                 {{ schedule_form.retention_days(class="form-control") }}
                             </div>
                         </div>
-
-                        <div class="row g-3 mt-3">
-                            <div class="col-md-6">
-                                <div class="form-check">
-                                    {{ schedule_form.scope_full(class="form-check-input") }}
-                                    {{ schedule_form.scope_full.label(class="form-check-label") }}
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="form-check">
-                                    {{ schedule_form.scope_compliance(class="form-check-input") }}
-                                    {{ schedule_form.scope_compliance.label(class="form-check-label") }}
-                                </div>
-                            </div>
-                        </div>
                     </div>
                     <div class="card-footer bg-light border-0 text-center pt-3">
                         {{ schedule_form.save_settings(class="btn btn-success btn-lg px-5 py-2 shadow-sm") }}
