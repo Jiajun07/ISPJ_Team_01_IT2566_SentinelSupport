@@ -636,6 +636,7 @@ def shared_with_me():
                     f.file_name,
                     f.file_size,
                     f.updated_at,
+                    f.sensitivity,
                     fsl.share_token,
                     fsl.created_by as owner,
                     fsl.require_key_exchange,
@@ -653,9 +654,9 @@ def shared_with_me():
             tenant_shares = []
             for row in rows:
                 verification_status = 'not_required'
-                if row[6]:  # require_key_exchange
-                    if row[7]:  # exchange_id
-                        exchange = get_key_exchange(tenant_id, row[7])
+                if row[7]:  # require_key_exchange
+                    if row[8]:  # exchange_id
+                        exchange = get_key_exchange(tenant_id, row[8])
                         if exchange:
                             verification_status = exchange.get('status', 'pending')
                             # Only show verified exchanges
@@ -669,15 +670,15 @@ def shared_with_me():
                     'name': row[1],
                     'size': row[2],
                     'modified': row[3].strftime('%Y-%m-%d %H:%M:%S') if row[3] else 'N/A',
-                    'owner': row[5],
-                    'sensitivity': 'Shared',
-                    'url': f"/download/shared/{row[1]}?share={row[4]}&tenant={tenant_id}",
-                    'share_token': row[4],
+                    'owner': row[6],
+                    'sensitivity': row[4] or 'Public',
+                    'url': f"/download/shared/{row[1]}?share={row[5]}&tenant={tenant_id}",
+                    'share_token': row[5],
                     'owner_tenant_id': tenant_id,
-                    'require_key_exchange': row[6],
-                    'exchange_id': row[7],
+                    'require_key_exchange': row[7],
+                    'exchange_id': row[8],
                     'verification_status': verification_status,
-                    'date_shared': row[8].strftime('%Y-%m-%d') if row[8] else 'N/A'
+                    'date_shared': row[9].strftime('%Y-%m-%d') if row[9] else 'N/A'
                 })
             
             return render_template("users/shared_with_me.html", files=tenant_shares, tenant_id=tenant_id, account_name=user_email)
@@ -1701,7 +1702,7 @@ def file_detail(filename):
             "version_number": v['version_number']
         })
     
-    return render_template("file_detail.html", file=file_info, versions=versions)
+    return render_template("users/file_detail.html", file=file_info, versions=versions)
 
 
 @app.route('/upload/temp', methods=['POST'])
