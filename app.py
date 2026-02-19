@@ -401,10 +401,12 @@ def sanitize_filename(filename):
 
 @app.route("/", methods=["GET", "POST"])
 def home():
+    user_email = session.get('email', 'Anonymous')
     log_audit_event(
         action_type='HOME_ACCESS',
-        description="User accessed home page",
-        category='USER_ACTIVITY'
+        description=f"User {user_email} accessed home page",
+        category='USER_ACTIVITY',
+        user_email=user_email
     )
     return render_template("front_page.html")
 
@@ -604,11 +606,12 @@ def myfiles():
     user_email = session.get('email', 'Unknown')
     files = get_uploaded_files()
 
-    #log audit event
-    log_audit_event(
-        action_type='FILE_LIST_ACCESS',
-        description=f"User accessed file list",
+    log_tenant_event(
+        action_type='TENANT_FILE_ACCESS',
+        description=f"User {user_email} accessed their file list",
         category='FILE_MANAGEMENT',
+        tenant_id=tenant_id,
+        user_email=user_email,
         target_resource='FILE_LIST',
         additional_data={'file_count': len(files)}
     )
@@ -686,15 +689,14 @@ def shared_with_me():
     except Exception as e:
         print(f"❌ Error loading shared files: {e}")
         #log audit event
-    log_tenant_event(
+
+    log_user_activity(
         action_type='SHARED_FILES_ACCESS',
-        description=f"User accessed shared files (tenant_{tenant_id})",
+        description=f"User accessed shared files list",
         category='FILE_MANAGEMENT',
         target_resource='SHARED_FILES',
-        tenant_id=tenant_id,
         additional_data={'shared_file_count': len(tenant_shares)}
     )
-    
     return render_template("users/shared_with_me.html", files=[], tenant_id=tenant_id, account_name=user_email)
 
 
@@ -2514,6 +2516,7 @@ def download_file(filename):
     from urllib.parse import unquote
     from io import BytesIO
     tenant_id = get_current_tenant()
+    user_email = session.get('email', 'Unknown')
     filename = unquote(filename)
     
     # Get file from database
@@ -2528,7 +2531,8 @@ def download_file(filename):
             target_resource='FILE',
             resource_id=filename,
             success=False,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            user_email=user_email
         )
 
         flash("File not found", "danger")
@@ -2541,7 +2545,8 @@ def download_file(filename):
         target_resource='FILE',
         resource_id=filename,
         additional_data={'file_size': file_record['file_size']},
-        tenant_id=tenant_id
+        tenant_id=tenant_id,
+        user_email=user_email
     )
     
     
@@ -5261,63 +5266,47 @@ def system_admin_audit_dashboard():
 @app.route('/tenant/<int:tenant_id>/audit-logs')
 def tenant_audit_logs(tenant_id):
     try:
-        if session.get('tenant_id') != tenant_id:
-            flash("Access denied to this tenant's audit logs.", "danger")
+        if str(session.get('tenant_id')) != str(tenant_id):
             return redirect(url_for('login'))
-        category = request.args.get('category')
-        admin_email = request.args.get('admin_email')
-        start_date = request.args.get('start_date')
+
         page = int(request.args.get('page', 1))
-        per_page = int(request.args.get('per_page', 50))
-        filters = {
-            'tenant_id': str(tenant_id) 
-        }
-        if category:
-            filters['category'] = category
-        if admin_email:
-            filters['admin_email'] = admin_email
-        if start_date:
-            filters['start_date'] = datetime.fromisoformat(start_date)
+        per_page = 20
         offset = (page - 1) * per_page
-        result = SysLogService.getSysLogs(
-            limit=per_page, 
-            offset=offset, 
-            filters=filters
-        )
-        stats = SysLogService.getSysStats(filters)
-        tenant = db.session.execute(
-            text("SELECT company_name FROM tenants WHERE id = :id"),
-            {"id": tenant_id}
-        ).first()
-        tenant_name = tenant.company_name if tenant else None
-        SysLogService.logTenantEvent(
+
+        # Build filters
+        filters = {'tenant_id': str(tenant_id)}
+        if request.args.get('user_email'):
+            filters['admin_email'] = request.args.get('user_email')  # ← filter by admin_email
+        if request.args.get('category'):
+            filters['category'] = request.args.get('category')
+        if request.args.get('start_date'):
+            filters['start_date'] = request.args.get('start_date')
+
+        result = SysLogService.getSysLogs(limit=per_page, offset=offset, filters=filters)
+        stats = SysLogService.getSysStats(filters={'tenant_id': str(tenant_id)})
+
+        # Get tenant name
+        tenant = Tenant.query.get(tenant_id)
+        tenant_name = tenant.company_name if tenant else f'Tenant {tenant_id}'
+
+        return render_template(
+            'CompanyAdmin/tenant_auditlogs.html',
+            logs=result['logs'],        
+            stats=stats,
             tenant_id=tenant_id,
-            action_type='TENANT_ACCESS',
-            description="Tenant admin accessed audit logs dashboard"
+            tenant_name=tenant_name,
+            categories=SysLogService.CATEGORIES,
+            total_count=result['total_count'],
+            current_page=page,
+            per_page=per_page,
+            has_more=result['has_more']
         )
-        return render_template('CompanyAdmin/tenant_auditlogs.html',
-                             logs=result['logs'],
-                             total_count=result['total_count'],
-                             has_more=result['has_more'],
-                             current_page=page,
-                             per_page=per_page,
-                             stats=stats,
-                             categories=SysLogService.CATEGORIES,
-                             action_types=SysLogService.ACTION_TYPES,
-                             tenant_id=str(tenant_id),
-                             tenant_name=tenant_name)
     except Exception as e:
-        SysLogService.logTenantEvent(
-            tenant_id=tenant_id,
-            action_type='TENANT_ACCESS',
-            description=f"Failed to access tenant audit logs: {str(e)}",
-            success=False
-        )
-        flash(f"Error loading tenant audit logs: {str(e)}", "error")
-        return render_template('CompanyAdmin/tenant_auditlogs.html', 
-                             logs=[], 
-                             total_count=0,
-                             tenant_id=str(tenant_id))
+        print(f"❌ Tenant audit log error: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error loading audit logs: {str(e)}", "danger")
+        return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
 
 def log_system_admin_event(action_type, description, category='GENERAL', **kwargs):
     try:
@@ -5338,7 +5327,14 @@ def log_system_admin_event(action_type, description, category='GENERAL', **kwarg
 def log_tenant_event(action_type, description, category='GENERAL', tenant_id=None, **kwargs):
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
-        user_email = session.get('email') or session.get('temp_user_email')
+        
+        # FIX: Check kwargs for user_email first, then fall back to session
+        user_email = (
+            kwargs.pop('user_email', None) or  # Pull from kwargs if passed explicitly
+            session.get('email') or 
+            session.get('temp_user_email') or
+            'Unknown'
+        )
         tenant_id = tenant_id or session.get('tenant_id')
         
         if not tenant_id:
@@ -5348,7 +5344,7 @@ def log_tenant_event(action_type, description, category='GENERAL', tenant_id=Non
             tenant_id=tenant_id,
             action_type=action_type,
             description=description,
-            admin_email=user_email,
+            admin_email=user_email,  # ← Now correctly populated
             category=category,
             ip_address=ip_address,
             **kwargs
@@ -5358,6 +5354,13 @@ def log_tenant_event(action_type, description, category='GENERAL', tenant_id=Non
 
 def log_audit_event(action_type, description, category='GENERAL', force_system=False, force_tenant=False, **kwargs):
     try:
+        user_email = session.get('email') or session.get('temp_user_email') or 'Unknown'
+        user_id = session.get('user_id') or 'Unknown'
+        if 'user_email' not in kwargs:
+            kwargs['user_email'] = user_email
+        if 'user_id' not in kwargs:
+            kwargs['user_id'] = user_id
+        
         if force_system:
             return log_system_admin_event(action_type, description, category, **kwargs)
         
@@ -5384,6 +5387,28 @@ def log_audit_event(action_type, description, category='GENERAL', force_system=F
             
     except Exception as e:
         current_app.logger.error(f"Audit logging error: {e}")
+
+def get_current_user_info():
+    return {
+        'user_email': session.get('email', 'Unknown'),
+        'user_id': session.get('user_id', 'Unknown'),
+        'tenant_id': session.get('tenant_id'),
+        'user_role': session.get('user_role', 'Unknown'),
+        'ip_address': request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr)
+    }
+
+def log_user_activity(action_type, description, category='USER_ACTIVITY', **kwargs):
+    user_info = get_current_user_info()
+    
+    # Merge user info with provided kwargs
+    log_data = {**user_info, **kwargs}
+    
+    return log_audit_event(
+        action_type=action_type,
+        description=description,
+        category=category,
+        **log_data
+    )
 
 # Dashboard ===========================================================
 

@@ -210,10 +210,22 @@
                                 <tr class="{% if not log.success %}table-danger table-danger-subtle{% endif %}">
                                     <td class="px-4 py-3">
                                         <div class="text-dark fw-medium">
-                                            {{ log.created_at[:10] if log.created_at else '' }}
+                                            {% if log.created_at %}
+                                            {% if log.created_at is string %}
+                                            {{ log.created_at[:10] }}
+                                            {% else %}
+                                            {{ log.created_at.strftime('%Y-%m-%d') }}
+                                            {% endif %}
+                                            {% endif %}
                                         </div>
                                         <small class="text-muted">
-                                            {{ log.created_at[11:16] if log.created_at else '' }}
+                                            {% if log.created_at %}
+                                            {% if log.created_at is string %}
+                                            {{ log.created_at[11:16] }}
+                                            {% else %}
+                                            {{ log.created_at.strftime('%H:%M') }}
+                                            {% endif %}
+                                            {% endif %}
                                         </small>
                                     </td>
                                     <td class="px-4 py-3">
@@ -267,9 +279,6 @@
                                             log.action_description and log.action_description|length > 80 %}...{% endif
                                             %}
                                         </div>
-                                        {% if log.resource_id %}
-                                        <small class="text-muted masked-resource-id">{{ log.resource_id }}</small>
-                                        {% endif %}
                                     </td>
                                     <td class="px-4 py-3">
                                         <span class="text-dark fw-medium masked-ip">{{ log.ip_address or '-' }}</span>
@@ -310,44 +319,55 @@
 
                     <!-- Pagination -->
                     {% if total_count and total_count > 0 %}
-                    <div class="d-flex justify-content-between align-items-center p-4 border-top">
+                    {% set total_pages = (total_count / per_page)|round(0, 'ceil')|int %}
+                    <div class="d-flex justify-content-between align-items-center p-4 border-top flex-wrap gap-2">
                         <div class="text-muted">
                             Showing {{ ((current_page - 1) * per_page) + 1 }} to
                             {{ current_page * per_page if current_page * per_page < total_count else total_count }} of
                                 {{ total_count }} entries </div>
                                 <nav>
-                                    <ul class="pagination pagination-sm mb-0">
-                                        {% if current_page > 1 %}
-                                        <li class="page-item">
-                                            <a class="page-link"
-                                                href="?page={{ current_page - 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                                <i class="fas fa-chevron-left"></i>
-                                            </a>
-                                        </li>
-                                        {% endif %}
+                                    <div class="d-flex align-items-center gap-1">
+                                        <!-- First Page -->
+                                        <a class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}"
+                                            href="?page=1&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
+                                            title="First Page">
+                                            <i class="fas fa-angle-double-left"></i>
+                                        </a>
+                                        <!-- Previous Page -->
+                                        <a class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}"
+                                            href="?page={{ current_page - 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
+                                            title="Previous Page">
+                                            <i class="fas fa-chevron-left"></i>
+                                        </a>
 
-                                        {% set start_page = [current_page - 2, 1]|max %}
-                                        {% set end_page = [current_page + 2, (total_count / per_page)|round(0,
-                                        'ceil')|int]|min %}
+                                        <!-- Page Number Input -->
+                                        <form method="GET" class="d-flex align-items-center mx-2" id="pageJumpForm">
+                                            <input type="hidden" name="tenant_id" value="{{ tenant_id }}">
+                                            {% for key, value in request.args.items() %}
+                                            {% if key != 'page' and key != 'tenant_id' %}
+                                            <input type="hidden" name="{{ key }}" value="{{ value }}">
+                                            {% endif %}
+                                            {% endfor %}
+                                            <span class="text-muted me-2 small">Page</span>
+                                            <input type="number" name="page" value="{{ current_page }}" min="1"
+                                                max="{{ total_pages }}" class="form-control form-control-sm text-center"
+                                                style="width: 65px;" onchange="this.form.submit()" title="Go to page">
+                                            <span class="text-muted ms-2 small">of {{ total_pages }}</span>
+                                        </form>
 
-                                        {% for page_num in range(start_page, end_page + 1) %}
-                                        <li class="page-item {% if page_num == current_page %}active{% endif %}">
-                                            <a class="page-link"
-                                                href="?page={{ page_num }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                                {{ page_num }}
-                                            </a>
-                                        </li>
-                                        {% endfor %}
-
-                                        {% if has_more %}
-                                        <li class="page-item">
-                                            <a class="page-link"
-                                                href="?page={{ current_page + 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                                <i class="fas fa-chevron-right"></i>
-                                            </a>
-                                        </li>
-                                        {% endif %}
-                                    </ul>
+                                        <!-- Next Page -->
+                                        <a class="btn btn-sm btn-outline-secondary {% if not has_more %}disabled{% endif %}"
+                                            href="?page={{ current_page + 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
+                                            title="Next Page">
+                                            <i class="fas fa-chevron-right"></i>
+                                        </a>
+                                        <!-- Last Page -->
+                                        <a class="btn btn-sm btn-outline-secondary {% if not has_more %}disabled{% endif %}"
+                                            href="?page={{ total_pages }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
+                                            title="Last Page">
+                                            <i class="fas fa-angle-double-right"></i>
+                                        </a>
+                                    </div>
                                 </nav>
                         </div>
                         {% endif %}
