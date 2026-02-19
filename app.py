@@ -60,6 +60,10 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
+# 🔥 ENHANCED SESSION SECURITY
+app.config['SESSION_COOKIE_SECURE'] = True      # Only send over HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True    # Prevent Javascript access (XSS defense)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'   # Prevent CSRF leakage
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
     "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
@@ -375,11 +379,18 @@ def after_request(response):
 
 
 def get_current_tenant():
-    """Get current tenant ID from session, fallback to request only if needed"""
-    tenant_id = session.get('tenant_id')
-    if tenant_id:
-        return str(tenant_id)
-    return request.args.get('tenant') or request.form.get('tenant')
+    """Get current tenant ID and strictly enforce Integer type to prevent SQL injection"""
+    tenant_id = session.get('tenant_id') or request.args.get('tenant') or request.form.get('tenant')
+
+    if not tenant_id:
+        return None
+
+    try:
+        # 🔥 FIX: Strictly validate it is an integer.
+        # If a hacker passes "?tenant=1; DROP TABLE users", this int() cast will fail and block them.
+        return int(tenant_id)
+    except ValueError:
+        return None
 
 def get_tenant_upload_folder(tenant_id):
     """Get upload folder for specific tenant"""
