@@ -64,7 +64,6 @@
 <div class="container-fluid mt-4 px-0">
     <div class="row g-0">
         <div class="col-12">
-            <!-- Header Section -->
             <div class="d-flex justify-content-between align-items-center mb-4 px-4">
                 <h2 class="text-dark fw-bold">
                     <i class="fas fa-building text-primary me-2"></i>Tenant Audit Logs
@@ -80,7 +79,6 @@
                 </a>
             </div>
 
-            <!-- Statistics Cards -->
             <div class="stats-container mb-4 px-4">
                 <div class="stats-card-item">
                     <div class="card border-0 shadow-sm h-100 stats-card">
@@ -136,7 +134,6 @@
                 </div>
             </div>
 
-            <!-- Filters Section -->
             <div class="card border-0 shadow-sm mb-4 mx-4">
                 <div class="card-body">
                     <form method="GET" class="row g-3 align-items-end">
@@ -183,7 +180,6 @@
                 </div>
             </div>
 
-            <!-- Full Width Table -->
             <div class="card border-0 shadow-sm mx-4">
                 <div class="card-body p-0">
                     <div class="table-responsive full-width-table">
@@ -317,7 +313,6 @@
                         </table>
                     </div>
 
-                    <!-- Pagination -->
                     {% if total_count and total_count > 0 %}
                     {% set total_pages = (total_count / per_page)|round(0, 'ceil')|int %}
                     <div class="d-flex justify-content-between align-items-center p-4 border-top flex-wrap gap-2">
@@ -327,20 +322,17 @@
                                 {{ total_count }} entries </div>
                                 <nav>
                                     <div class="d-flex align-items-center gap-1">
-                                        <!-- First Page -->
                                         <a class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}"
                                             href="?page=1&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
                                             title="First Page">
                                             <i class="fas fa-angle-double-left"></i>
                                         </a>
-                                        <!-- Previous Page -->
                                         <a class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}"
                                             href="?page={{ current_page - 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
                                             title="Previous Page">
                                             <i class="fas fa-chevron-left"></i>
                                         </a>
 
-                                        <!-- Page Number Input -->
                                         <form method="GET" class="d-flex align-items-center mx-2" id="pageJumpForm">
                                             <input type="hidden" name="tenant_id" value="{{ tenant_id }}">
                                             {% for key, value in request.args.items() %}
@@ -355,13 +347,11 @@
                                             <span class="text-muted ms-2 small">of {{ total_pages }}</span>
                                         </form>
 
-                                        <!-- Next Page -->
                                         <a class="btn btn-sm btn-outline-secondary {% if not has_more %}disabled{% endif %}"
                                             href="?page={{ current_page + 1 }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
                                             title="Next Page">
                                             <i class="fas fa-chevron-right"></i>
                                         </a>
-                                        <!-- Last Page -->
                                         <a class="btn btn-sm btn-outline-secondary {% if not has_more %}disabled{% endif %}"
                                             href="?page={{ total_pages }}&tenant_id={{ tenant_id }}{% for key, value in request.args.items() %}{% if key != 'page' and key != 'tenant_id' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
                                             title="Last Page">
@@ -509,7 +499,6 @@
             font-size: 1.5rem;
         }
 
-        /* ✅ Responsive Design */
         @media (max-width: 1200px) {
 
             .full-width-table .table td,
@@ -528,20 +517,17 @@
 
             .stats-container {
                 gap: 15px;
-                /* Slightly smaller gap on large tablets */
             }
         }
 
         @media (max-width: 992px) {
             .stats-container {
                 flex-wrap: wrap;
-                /* Allow wrapping on tablets */
                 gap: 15px;
             }
 
             .stats-card-item {
                 flex: 0 0 calc(50% - 7.5px);
-                /* 2 cards per row */
             }
 
             .stats-number {
@@ -573,7 +559,6 @@
 
             .stats-card-item {
                 flex: none;
-                /* Reset flex for mobile */
                 width: 100%;
             }
 
@@ -606,7 +591,6 @@
             }
         }
 
-        /* Enhanced Form Styling */
         .custom-input,
         .custom-select {
             border: 2px solid #e9ecef;
@@ -660,7 +644,6 @@
             color: white;
         }
 
-        /* Table Styling */
         .table-hover tbody tr:hover {
             background-color: rgba(0, 123, 255, 0.05);
             transition: background-color 0.2s ease;
@@ -689,7 +672,6 @@
             background-color: #f8f9fa !important;
         }
 
-        /* Pagination Styling */
         .pagination .page-link {
             border: none;
             color: #6c757d;
@@ -711,7 +693,6 @@
             transform: translateY(-1px);
         }
 
-        /* Empty State Styling */
         .text-center .fas.fa-inbox {
             color: #dee2e6;
         }

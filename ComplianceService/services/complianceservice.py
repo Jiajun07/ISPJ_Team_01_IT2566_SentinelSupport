@@ -19,6 +19,27 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 
 SGT = timezone(timedelta(hours=8))
 
+def convert_to_sgt(ts):
+    """Convert any datetime to SGT with 2 decimal places"""
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        ts = datetime.fromisoformat(ts)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc).astimezone(SGT)
+    else:
+        ts = ts.astimezone(SGT)
+    return ts.replace(microsecond=(ts.microsecond // 10000) * 10000)
+
+def format_sgt_timestamp(ts, fmt='%Y-%m-%d %H:%M:%S'):
+    ts = convert_to_sgt(ts)
+    if ts is None:
+        return ''
+    base = ts.strftime(fmt)
+    centiseconds = f"{ts.microsecond // 10000:02d}"
+    return f"{base}.{centiseconds}"
+
+
 class ComplianceService:
     @staticmethod
     def generateComplianceData(tenantID=None, startDate=None, endDate=None):
@@ -67,7 +88,7 @@ class ComplianceService:
                     
                     logData.append({
                         'id': log.id,
-                        'timestamp': log.created_at,
+                        'timestamp': convert_to_sgt(log.created_at),
                         'tenant_id': log.target_tenant_id,
                         'actor_id': log.admin_id,
                         'actor_email': log.admin_email or 'System',
@@ -349,7 +370,7 @@ class ComplianceService:
         output = StringIO()
         writer = csv.writer(output)
         writer.writerow(['COMPLIANCE REPORT SUMMARY'])
-        writer.writerow(['Generated On', datetime.now(SGT).strftime('%Y-%m-%d %H:%M:%S')])
+        writer.writerow(['Generated On', format_sgt_timestamp(datetime.now(SGT))])
         writer.writerow([])
         writer.writerow(['Metric', 'Count'])
         for key, value in summary.items():
@@ -362,7 +383,7 @@ class ComplianceService:
         ])
         for log in logs:
             writer.writerow([
-                log['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if log['timestamp'] else '',
+                format_sgt_timestamp(log['timestamp']) if log['timestamp'] else '',
                 log['tenant_id'] or '',
                 log['actor_email'] or '',
                 log['actor_role'] or '',
@@ -391,7 +412,7 @@ class ComplianceService:
         for log in logs:
             log_entry = dict(log)
             if log_entry['timestamp']:
-                log_entry['timestamp'] = log_entry['timestamp'].isoformat()
+                log_entry['timestamp'] = format_sgt_timestamp(log_entry['timestamp'])
             report_data['audit_logs'].append(log_entry)
         
         return json.dumps(report_data, indent=2, default=str)
@@ -430,7 +451,6 @@ class ComplianceService:
                 fontSize=10,
                 spaceAfter=6
             )
-
             story.append(Paragraph("COMPLIANCE AUDIT REPORT", title_style))
             story.append(Spacer(1, 20))
             report_info_data = [
@@ -500,18 +520,7 @@ class ComplianceService:
                 log_data = [log_headers]
 
                 for log in logs:
-                    if log.get('timestamp'):
-                        ts = log['timestamp']
-                        if hasattr(ts, 'tzinfo'):
-                            if ts.tzinfo is None:
-                                ts = ts.replace(tzinfo=timezone.utc).astimezone(SGT)
-                            else:
-                                ts = ts.astimezone(SGT)
-                            ts_str = ts.strftime('%Y-%m-%d %H:%M:%S.') + f"{ts.microsecond // 10000:02d}"
-                        else:
-                            ts_str = str(ts)[:21]
-                    else:
-                        ts_str = ''
+                    ts_str = format_sgt_timestamp(log.get('timestamp')) if log.get('timestamp') else ''
 
                     row = [
                         truncate(ts_str, COL_LIMITS[0]),

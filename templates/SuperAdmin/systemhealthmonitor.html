@@ -122,7 +122,6 @@
         </div>
     </div>
 
-    <!-- Database Details Section -->
     {% if database_details %}
     <div class="table-section">
         <h3 class="section-title">Database Connection Details</h3>
@@ -159,7 +158,6 @@
     </div>
     {% endif %}
 
-    <!-- Keep your existing Error Audit and Tenant Alerts sections -->
     <div class="table-section">
         <h3 class="section-title">Error Audit</h3>
         <table class="data-table">
@@ -193,7 +191,6 @@
 </div>
 
 <style>
-    /* Your existing styles plus these additions */
     .health-container {
         max-width: 1200px;
         margin: 20px auto;
@@ -202,7 +199,6 @@
         min-height: calc(100vh - 80px);
     }
 
-    /* Add new styles for database details */
     .details-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -233,7 +229,6 @@
         word-break: break-word;
     }
 
-    /* Enhanced progress ring colors */
     .progress-ring-fill {
         fill: none;
         stroke: #4CAF50;
@@ -244,7 +239,6 @@
         transition: all 0.8s ease;
     }
 
-    /* Keep all your existing styles */
     .page-title {
         font-size: 24px;
         font-weight: 600;
@@ -448,7 +442,6 @@
 </style>
 
 <script>
-    // Auto-refresh every 30 seconds
     setInterval(() => {
         location.reload();
     }, 30000);
