@@ -1389,88 +1389,75 @@ class KeyExchange(db.Model):
 
 # ==================== SHARING HELPER FUNCTIONS ====================
 
-def create_share_link(tenant_id, document_id, filename, created_by, password_hash=None, 
-                      require_key_exchange=False, exchange_id=None, expires_at=None):
-    """Create a share link in database"""
-    import secrets
+def ensure_file_sharing_links_schema(tenant_id):
+    """Ensure file_sharing_links table has required columns for sharing features."""
     schema_name = f"tenant_{tenant_id}"
-    
+    session = None
+
     try:
         session = MasterSessionLocal()
         session.execute(text(f'SET search_path TO "{schema_name}", public'))
-        
-        # Insert file
-        result = session.execute(text(f'''
-            INSERT INTO files (
-                document_id, file_name, owner_user_id, owner_email, 
-                file_data, file_size, file_hash, mime_type,
-                sensitivity, classification, risk_level, notes,
-                is_current_version, created_at, updated_at
-            ) VALUES (
-                :doc_id, :filename, :owner_id, :owner_email,
-                :file_data, :file_size, :file_hash, :mime_type,
-                :sensitivity, :classification, :risk_level, :notes,
-                TRUE, NOW(), NOW()
-            ) RETURNING id
-        '''), {
-            'doc_id': document_id,
-            'filename': filename,
-            'owner_id': owner_user_id,
-            'owner_email': owner_email,
-            'file_data': file_data,
-            'file_size': len(file_data),
-            'file_hash': file_hash,
-            'mime_type': mime_type,
-            'sensitivity': sensitivity,
-            'classification': classification,
-            'risk_level': risk_level,
-            'notes': notes
-        })
-        
-        file_id = result.fetchone()[0]
-        
-        # Create initial version entry
+
         session.execute(text(f'''
-            INSERT INTO file_versions (
-                document_id, version_number, file_name,
-                file_data, file_size, file_hash, mime_type,
-                uploaded_by, uploaded_at, is_current
-            ) VALUES (
-                :doc_id, 1, :filename,
-                :file_data, :file_size, :file_hash, :mime_type,
-                :uploaded_by, NOW(), TRUE
+            CREATE TABLE IF NOT EXISTS "{schema_name}".file_sharing_links (
+                id SERIAL PRIMARY KEY,
+                document_id VARCHAR(50) NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                share_token VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255),
+                require_key_exchange BOOLEAN DEFAULT FALSE,
+                exchange_id VARCHAR(255),
+                created_by VARCHAR(255),
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                expires_at TIMESTAMP,
+                last_accessed TIMESTAMP,
+                access_count INT DEFAULT 0
             )
-        '''), {
-            'doc_id': document_id,
-            'filename': filename,
-            'file_data': file_data,
-            'file_size': len(file_data),
-            'file_hash': file_hash,
-            'mime_type': mime_type,
-            'uploaded_by': owner_email
-        })
-        
+        '''))
+
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS require_key_exchange BOOLEAN DEFAULT FALSE'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS exchange_id VARCHAR(255)'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS created_by VARCHAR(255)'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS last_accessed TIMESTAMP'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS access_count INT DEFAULT 0'))
+
+        session.execute(text(f'''
+            UPDATE "{schema_name}".file_sharing_links
+            SET created_by = 'Unknown'
+            WHERE created_by IS NULL
+        '''))
+        session.execute(text(f'''
+            UPDATE "{schema_name}".file_sharing_links
+            SET is_active = TRUE
+            WHERE is_active IS NULL
+        '''))
+        session.execute(text(f'''
+            UPDATE "{schema_name}".file_sharing_links
+            SET access_count = 0
+            WHERE access_count IS NULL
+        '''))
+
+        session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_token ON "{schema_name}".file_sharing_links(share_token)'))
+        session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_document ON "{schema_name}".file_sharing_links(document_id)'))
+
         session.commit()
         session.close()
-        
-        return {
-            'success': True,
-            'file_id': file_id,
-            'document_id': document_id,
-            'filename': filename
-        }
-        
+        return True
+
     except Exception as e:
-        session.rollback()
-        session.close()
-        print(f"Error storing file in DB: {e}")
-        return {'success': False, 'error': str(e)}
-
-
-# NOTE: Duplicate add_file_version removed - using the correct one defined earlier (line 753)
-        print(f"Error retrieving file from DB: {e}")
-        return None
-
+        print(f"❌ Error ensuring file_sharing_links schema for tenant {tenant_id}: {e}")
+        if session:
+            try:
+                session.rollback()
+                session.close()
+            except:
+                pass
+        return False
 
 def delete_file_from_db(tenant_id: int, document_id: str, soft_delete: bool = True):
     """Delete or soft-delete a file from database"""
@@ -1538,6 +1525,10 @@ def create_share_link(tenant_id, document_id, filename, created_by, password_has
     schema_name = f"tenant_{tenant_id}"
     
     try:
+        # Ensure table/columns exist for older tenant schemas before inserting
+        if not ensure_file_sharing_links_schema(tenant_id):
+            return {'success': False, 'error': 'Failed to initialize sharing schema'}
+
         session = MasterSessionLocal()
         session.execute(text(f'SET search_path TO "{schema_name}", public'))
         

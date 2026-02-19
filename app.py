@@ -1104,7 +1104,9 @@ def generate_share_link():
         )
         
         if not result.get('success'):
-            return jsonify({'error': 'Failed to create share link'}), 500
+            error_detail = result.get('error', 'Unknown error')
+            print(f"❌ Share link creation failed for tenant {tenant_id}, file {filename}: {error_detail}")
+            return jsonify({'error': f'Failed to create share link: {error_detail}'}), 500
         
         share_token = result['share_token']
         
