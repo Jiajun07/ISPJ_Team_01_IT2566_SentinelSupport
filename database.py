@@ -1294,6 +1294,7 @@ class FileSharingLink(db.Model):
     
     # Metadata
     created_by = db.Column(db.String(255), nullable=False)
+    recipient_email = db.Column(db.String(255), nullable=True, index=True)
     is_active = db.Column(db.Boolean, default=True, index=True)
     created_at = db.Column(db.DateTime, default=db.func.now(), index=True)
     expires_at = db.Column(db.DateTime, nullable=True)
@@ -1408,6 +1409,7 @@ def ensure_file_sharing_links_schema(tenant_id):
                 require_key_exchange BOOLEAN DEFAULT FALSE,
                 exchange_id VARCHAR(255),
                 created_by VARCHAR(255),
+                recipient_email VARCHAR(255),
                 is_active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT NOW(),
                 expires_at TIMESTAMP,
@@ -1420,6 +1422,7 @@ def ensure_file_sharing_links_schema(tenant_id):
         session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS require_key_exchange BOOLEAN DEFAULT FALSE'))
         session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS exchange_id VARCHAR(255)'))
         session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS created_by VARCHAR(255)'))
+        session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS recipient_email VARCHAR(255)'))
         session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE'))
         session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()'))
         session.execute(text(f'ALTER TABLE "{schema_name}".file_sharing_links ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP'))
@@ -1444,6 +1447,7 @@ def ensure_file_sharing_links_schema(tenant_id):
 
         session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_token ON "{schema_name}".file_sharing_links(share_token)'))
         session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_document ON "{schema_name}".file_sharing_links(document_id)'))
+        session.execute(text(f'CREATE INDEX IF NOT EXISTS idx_share_links_recipient ON "{schema_name}".file_sharing_links(recipient_email)'))
 
         session.commit()
         session.close()
@@ -1518,8 +1522,8 @@ def get_file_versions_from_db(tenant_id: int, document_id: str):
 
 # ==================== SHARING HELPER FUNCTIONS ====================
 
-def create_share_link(tenant_id, document_id, filename, created_by, password_hash=None, 
-                      require_key_exchange=False, exchange_id=None, expires_at=None):
+def create_share_link(tenant_id, document_id, filename, created_by, password_hash=None,
+                      require_key_exchange=False, exchange_id=None, recipient_email=None, expires_at=None):
     """Create a share link in database"""
     import secrets
     schema_name = f"tenant_{tenant_id}"
@@ -1539,10 +1543,10 @@ def create_share_link(tenant_id, document_id, filename, created_by, password_has
         session.execute(text(f'''
             INSERT INTO "{schema_name}".file_sharing_links
             (document_id, file_name, share_token, password_hash, require_key_exchange,
-             exchange_id, created_by, is_active, created_at, expires_at, access_count)
+             exchange_id, created_by, recipient_email, is_active, created_at, expires_at, access_count)
             VALUES
             (:document_id, :file_name, :share_token, :password_hash, :require_key_exchange,
-             :exchange_id, :created_by, TRUE, NOW(), :expires_at, 0)
+             :exchange_id, :created_by, :recipient_email, TRUE, NOW(), :expires_at, 0)
         '''), {
             'document_id': document_id,
             'file_name': filename,
@@ -1551,6 +1555,7 @@ def create_share_link(tenant_id, document_id, filename, created_by, password_has
             'require_key_exchange': require_key_exchange,
             'exchange_id': exchange_id,
             'created_by': created_by,
+            'recipient_email': recipient_email,
             'expires_at': expires_at
         })
         
@@ -1580,7 +1585,7 @@ def get_share_link_by_token(tenant_id, share_token):
         
         result = session.execute(text(f'''
             SELECT id, document_id, file_name, share_token, password_hash,
-                   require_key_exchange, exchange_id, created_by, is_active,
+                   require_key_exchange, exchange_id, created_by, recipient_email, is_active,
                    created_at, expires_at, last_accessed, access_count
             FROM "{schema_name}".file_sharing_links
             WHERE share_token = :token AND is_active = TRUE
@@ -1598,11 +1603,12 @@ def get_share_link_by_token(tenant_id, share_token):
                 'require_key_exchange': result[5],
                 'exchange_id': result[6],
                 'created_by': result[7],
-                'is_active': result[8],
-                'created_at': result[9],
-                'expires_at': result[10],
-                'last_accessed': result[11],
-                'access_count': result[12]
+                'recipient_email': result[8],
+                'is_active': result[9],
+                'created_at': result[10],
+                'expires_at': result[11],
+                'last_accessed': result[12],
+                'access_count': result[13]
             }
         
         return None

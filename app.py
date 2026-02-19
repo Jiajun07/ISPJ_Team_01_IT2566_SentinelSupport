@@ -55,6 +55,7 @@ from collections import defaultdict, deque
 from ComplianceService.routes.complianceroutes import compliance_bp
 from ComplianceService.routes.exportroutes import export_bp
 from prometheus_client import Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from file_encryption import encrypt_bytes, decrypt_bytes
 
 load_dotenv()
 
@@ -399,6 +400,25 @@ def sanitize_filename(filename):
     filename = re.sub(r'\s+', ' ', filename)
     return filename if filename else 'unnamed'
 
+
+def mask_email(email):
+    """Mask an email address for safer UI display."""
+    if not email or '@' not in email:
+        return email
+
+    local_part, domain_part = email.split('@', 1)
+    if not local_part:
+        return f"***@{domain_part}"
+
+    if len(local_part) == 1:
+        masked_local = "*"
+    elif len(local_part) == 2:
+        masked_local = f"{local_part[0]}*"
+    else:
+        masked_local = f"{local_part[0]}{'*' * (len(local_part) - 2)}{local_part[-1]}"
+
+    return f"{masked_local}@{domain_part}"
+
 @app.route("/", methods=["GET", "POST"])
 def home():
     user_email = session.get('email', 'Anonymous')
@@ -616,7 +636,7 @@ def myfiles():
         additional_data={'file_count': len(files)}
     )
 
-    return render_template("users/myfiles.html", files=files, tenant_id=tenant_id, account_name=user_email)
+    return render_template("users/myfiles.html", files=files, tenant_id=tenant_id, account_name=mask_email(user_email))
 
 
 @app.route('/shared-with-me', methods=['GET'])
@@ -624,18 +644,20 @@ def shared_with_me():
     """View files shared with current tenant - uses database"""
     tenant_id = get_current_tenant()
     user_email = session.get('email', 'Unknown')
-    
-    # Query sharing_activity table for files shared with this tenant
-    # We'll get unique file shares for this tenant
+    tenant_shares = []
+
     from sqlalchemy import text
-    
+
     try:
         with db.engine.connect() as conn:
             conn.execute(text(f'SET search_path TO tenant_{tenant_id}'))
-            
-            # Get all active share links where files have been accessed
+
+            # Get active share links that belong to current user by:
+            # 1) explicit recipient email on link
+            # 2) verified key exchange recipient
+            # 3) prior access/download activity tied to this user
             query = text("""
-                SELECT DISTINCT ON (fsl.document_id)
+                SELECT DISTINCT ON (f.document_id)
                     f.document_id,
                     f.file_name,
                     f.file_size,
@@ -648,14 +670,37 @@ def shared_with_me():
                     fsl.created_at as date_shared
                 FROM file_sharing_links fsl
                 JOIN files f ON fsl.document_id = f.document_id
+                LEFT JOIN key_exchanges ke ON fsl.exchange_id = ke.exchange_id
                 WHERE f.is_deleted = FALSE
-                ORDER BY fsl.document_id, fsl.created_at DESC
+                  AND (
+                    LOWER(COALESCE(fsl.recipient_email, '')) = LOWER(:user_email)
+                    OR (
+                        fsl.recipient_email IS NULL
+                        AND fsl.require_key_exchange = TRUE
+                        AND LOWER(COALESCE(ke.recipient_email, '')) = LOWER(:user_email)
+                        AND COALESCE(ke.status, '') = 'verified'
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM sharing s
+                        WHERE s.document_id = fsl.document_id
+                          AND LOWER(COALESCE(s.shared_with_email, '')) = LOWER(:user_email)
+                          AND s.is_active = TRUE
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM sharing_activity sa
+                        WHERE sa.shared_via_link = fsl.share_token
+                          AND LOWER(COALESCE(sa.shared_with_email, '')) = LOWER(:user_email)
+                          AND sa.action IN ('accessed', 'downloaded')
+                    )
+                  )
+                ORDER BY f.document_id, fsl.created_at DESC
             """)
-            
-            result = conn.execute(query)
+
+            result = conn.execute(query, {'user_email': user_email})
             rows = result.fetchall()
-            
-            tenant_shares = []
+
             for row in rows:
                 verification_status = 'not_required'
                 if row[7]:  # require_key_exchange
@@ -668,7 +713,7 @@ def shared_with_me():
                                 continue
                         else:
                             continue
-                
+
                 tenant_shares.append({
                     'document_id': row[0],
                     'name': row[1],
@@ -684,9 +729,9 @@ def shared_with_me():
                     'verification_status': verification_status,
                     'date_shared': row[9].strftime('%Y-%m-%d') if row[9] else 'N/A'
                 })
-            
-            return render_template("users/shared_with_me.html", files=tenant_shares, tenant_id=tenant_id, account_name=user_email)
-    
+
+            return render_template("users/shared_with_me.html", files=tenant_shares, tenant_id=tenant_id, account_name=mask_email(user_email))
+
     except Exception as e:
         print(f"❌ Error loading shared files: {e}")
         #log audit event
@@ -698,7 +743,92 @@ def shared_with_me():
         target_resource='SHARED_FILES',
         additional_data={'shared_file_count': len(tenant_shares)}
     )
-    return render_template("users/shared_with_me.html", files=[], tenant_id=tenant_id, account_name=user_email)
+    return render_template("users/shared_with_me.html", files=[], tenant_id=tenant_id, account_name=mask_email(user_email))
+
+
+def record_share_for_user(tenant_id, document_id, file_name, shared_by_email, shared_with_email):
+    """Persist recipient visibility in sharing table so Shared with me remains stable."""
+    try:
+        target_email = (shared_with_email or '').strip().lower()
+        if not target_email:
+            return False
+
+        schema_name = f"tenant_{tenant_id}"
+        with db.engine.begin() as conn:
+            conn.execute(text(f'SET search_path TO "{schema_name}", public'))
+            conn.execute(text(f'''
+                INSERT INTO "{schema_name}".sharing
+                (document_id, file_name, shared_with_email, shared_by_email, access_level,
+                 is_accepted, is_active, shared_at, last_accessed, access_count)
+                VALUES
+                (:document_id, :file_name, :shared_with_email, :shared_by_email, 'download',
+                 TRUE, TRUE, NOW(), NOW(), 1)
+                ON CONFLICT (document_id, shared_with_email)
+                DO UPDATE SET
+                    file_name = EXCLUDED.file_name,
+                    shared_by_email = EXCLUDED.shared_by_email,
+                    is_accepted = TRUE,
+                    is_active = TRUE,
+                    last_accessed = NOW(),
+                    access_count = COALESCE(sharing.access_count, 0) + 1
+            '''), {
+                'document_id': document_id,
+                'file_name': file_name,
+                'shared_with_email': target_email,
+                'shared_by_email': shared_by_email or 'Unknown'
+            })
+        return True
+    except Exception as e:
+        print(f"❌ Error recording share for user: {e}")
+        return False
+
+
+def ensure_share_link_for_verified_exchange(tenant_id, exchange):
+    """Create a share link for verified key exchange if none exists yet."""
+    try:
+        if not exchange:
+            return None
+
+        exchange_id = exchange.get('exchange_id')
+        document_id = exchange.get('document_id')
+        file_name = exchange.get('file_name')
+        sharer_email = exchange.get('sharer_email')
+        recipient_email = exchange.get('recipient_email')
+
+        if not exchange_id or not document_id or not file_name:
+            return None
+
+        schema_name = f"tenant_{tenant_id}"
+        with db.engine.connect() as conn:
+            conn.execute(text(f'SET search_path TO "{schema_name}", public'))
+            existing = conn.execute(text('''
+                SELECT share_token
+                FROM file_sharing_links
+                WHERE exchange_id = :exchange_id
+                  AND is_active = TRUE
+                ORDER BY created_at DESC
+                LIMIT 1
+            '''), {'exchange_id': exchange_id}).fetchone()
+
+        if existing:
+            return existing[0]
+
+        created = create_share_link(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            filename=file_name,
+            created_by=sharer_email or 'Unknown',
+            password_hash=None,
+            require_key_exchange=True,
+            exchange_id=exchange_id,
+            recipient_email=(recipient_email or '').strip().lower() or None,
+            expires_at=None
+        )
+
+        return created.get('share_token') if created.get('success') else None
+    except Exception as e:
+        print(f"❌ Error ensuring verified exchange link: {e}")
+        return None
 
 
 # Share link storage (in production, use database)
@@ -1069,7 +1199,7 @@ def generate_share_link():
         password = data.get('password')
         require_key_exchange = bool(data.get('require_key_exchange'))
         exchange_id = data.get('exchange_id')
-        recipient_email = data.get('recipient_email')
+        recipient_email = (data.get('recipient_email') or '').strip().lower() or None
         owner = session.get('email', 'Unknown')
         
         if not filename:
@@ -1100,6 +1230,7 @@ def generate_share_link():
             password_hash=password_hash,
             require_key_exchange=require_key_exchange,
             exchange_id=exchange_id,
+            recipient_email=recipient_email,
             expires_at=None  # Could add expiration from request
         )
         
@@ -1360,6 +1491,17 @@ def verify_recipient_fingerprint(exchange_id):
             status=new_status
         )
 
+        if new_status == 'verified':
+            latest_exchange = get_key_exchange(tenant_id, exchange_id) or exchange
+            ensure_share_link_for_verified_exchange(tenant_id, latest_exchange)
+            record_share_for_user(
+                tenant_id=tenant_id,
+                document_id=latest_exchange.get('document_id'),
+                file_name=latest_exchange.get('file_name'),
+                shared_by_email=latest_exchange.get('sharer_email'),
+                shared_with_email=latest_exchange.get('recipient_email')
+            )
+
         return jsonify({'success': True, 'message': 'Recipient identity verified.'}), 200
 
     except Exception as e:
@@ -1399,6 +1541,17 @@ def verify_sharer_fingerprint(exchange_id):
             status=new_status
         )
 
+        if new_status == 'verified':
+            latest_exchange = get_key_exchange(tenant_id, exchange_id) or exchange
+            ensure_share_link_for_verified_exchange(tenant_id, latest_exchange)
+            record_share_for_user(
+                tenant_id=tenant_id,
+                document_id=latest_exchange.get('document_id'),
+                file_name=latest_exchange.get('file_name'),
+                shared_by_email=latest_exchange.get('sharer_email'),
+                shared_with_email=latest_exchange.get('recipient_email')
+            )
+
         return jsonify({'success': True, 'message': 'Sharer identity verified.'}), 200
 
     except Exception as e:
@@ -1409,7 +1562,7 @@ def verify_sharer_fingerprint(exchange_id):
 def verify_identities():
     tenant_id = get_current_tenant()
     user_email = session.get('email', 'Unknown')
-    return render_template('users/verify_identities.html', tenant_id=tenant_id, account_name=user_email)
+    return render_template('users/verify_identities.html', tenant_id=tenant_id, account_name=mask_email(user_email))
 
 
 @csrf.exempt
@@ -1472,6 +1625,13 @@ def validate_share_link():
         
         if not link_info:
             return jsonify({'error': 'Invalid or expired share link'}), 404
+
+        current_user_email = (session.get('email', '') or '').strip().lower()
+        recipient_email = (link_info.get('recipient_email') or '').strip().lower()
+
+        # If this is a recipient-targeted share link, only recipient can use it
+        if recipient_email and current_user_email != recipient_email:
+            return jsonify({'error': 'This share link is not intended for your account'}), 403
         
         # Check if password is required
         if link_info.get('password_hash'):
@@ -1492,6 +1652,15 @@ def validate_share_link():
         if not file_record:
             return jsonify({'error': 'File not found'}), 404
 
+        if current_user_email:
+            record_share_for_user(
+                tenant_id=tenant_id,
+                document_id=document_id,
+                file_name=filename,
+                shared_by_email=link_info.get('created_by'),
+                shared_with_email=current_user_email
+            )
+
         verification_status = 'not_required'
         if require_key_exchange:
             if not exchange_id:
@@ -1501,6 +1670,9 @@ def validate_share_link():
                 if not exchange:
                     verification_status = 'exchange_not_found'
                 else:
+                    exchange_recipient = (exchange.get('recipient_email') or '').strip().lower()
+                    if exchange_recipient and current_user_email != exchange_recipient:
+                        return jsonify({'error': 'This share link is not intended for your account'}), 403
                     verification_status = 'verified' if exchange.get('status') == 'verified' else 'pending'
         
         # Build file info response
@@ -1542,6 +1714,7 @@ def validate_share_link():
             document_id=document_id,
             filename=filename,
             action='accessed',
+            shared_with_email=current_user_email or None,
             shared_by_email=link_info['created_by'],
             shared_via_link=share_token,
             ip_address=request.remote_addr,
@@ -1577,6 +1750,13 @@ def download_shared_file(filename):
     if not link_info:
         return "Invalid or expired share link", 404
 
+    current_user_email = (session.get('email', '') or '').strip().lower()
+    recipient_email = (link_info.get('recipient_email') or '').strip().lower()
+
+    # If this is a recipient-targeted share link, block all non-recipients
+    if recipient_email and current_user_email != recipient_email:
+        return "This share link is not intended for your account", 403
+
     if link_info.get('file_name') != filename:
         return "Share link does not match file", 403
 
@@ -1590,13 +1770,31 @@ def download_shared_file(filename):
         exchange = get_key_exchange(tenant_id, exchange_id)
         if not exchange or exchange.get('status') != 'verified':
             return "Identity not verified", 403
+        exchange_recipient = (exchange.get('recipient_email') or '').strip().lower()
+        if exchange_recipient and current_user_email != exchange_recipient:
+            return "This share link is not intended for your account", 403
 
     # Get file from database
     file_record = get_file_from_db(tenant_id, document_id=document_id)
     if not file_record:
         return "File not found", 404
+
+    if current_user_email:
+        record_share_for_user(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            file_name=filename,
+            shared_by_email=link_info.get('created_by'),
+            shared_with_email=current_user_email
+        )
     
-    file_data = file_record['file_data']
+    raw_blob = file_record['file_data']
+    if isinstance(raw_blob, memoryview):
+        raw_blob = raw_blob.tobytes()
+    elif isinstance(raw_blob, bytearray):
+        raw_blob = bytes(raw_blob)
+
+    file_data = decrypt_bytes(raw_blob)
     actual_filename = file_record['file_name']
     
     # Detect file extension if needed
@@ -1612,6 +1810,7 @@ def download_shared_file(filename):
         document_id=document_id,
         filename=actual_filename,
         action='downloaded',
+        shared_with_email=current_user_email or None,
         shared_by_email=link_info['created_by'],
         shared_via_link=share_token,
         ip_address=request.remote_addr,
@@ -1926,13 +2125,14 @@ def confirm_upload(temp_id):
         try:
             with open(pending_path, 'rb') as f:
                 file_data = f.read()
+                encrypted_file_data = encrypt_bytes(file_data)
 
             import mimetypes
             mime_type, _ = mimetypes.guess_type(original_name)
 
             from werkzeug.utils import secure_filename
             result = store_file_in_db(
-                tenant_id=tenant_id, file_data=file_data,
+                tenant_id=tenant_id, file_data=encrypted_file_data,
                 filename=secure_filename(request.form.get('name') or original_name),
                 owner_user_id=user_id, owner_email=user_email,
                 file_hash=file_hash, mime_type=mime_type or 'application/octet-stream',
@@ -2087,6 +2287,7 @@ def confirm_version_upload(temp_id, original_filename):
         # Read new version data
         with open(pending_path, 'rb') as f:
             file_data = f.read()
+            encrypted_file_data = encrypt_bytes(file_data)
 
         # Determine MIME type
         import mimetypes
@@ -2098,7 +2299,7 @@ def confirm_version_upload(temp_id, original_filename):
         result = add_file_version(
             tenant_id=tenant_id,
             document_id=document_id,
-            file_data=file_data,
+            file_data=encrypted_file_data,
             filename=new_filename,
             uploaded_by=user_email,
             file_hash=file_hash,
@@ -2177,6 +2378,12 @@ def download_version(document_id, version_number):
             return redirect(url_for('myfiles'))
         
         file_name, file_data, file_size, file_hash, mime_type = result
+        if isinstance(file_data, memoryview):
+            file_data = file_data.tobytes()
+        elif isinstance(file_data, bytearray):
+            file_data = bytes(file_data)
+
+        file_data = decrypt_bytes(file_data)
         
         # Create BytesIO from blob
         file_stream = BytesIO(file_data)
@@ -2422,7 +2629,7 @@ def view_bin():
     # Sort by deleted_at (newest first)
     tenant_bin_files.sort(key=lambda x: x['deleted_at'], reverse=True)
     
-    return render_template("users/bin.html", files=tenant_bin_files, tenant_id=tenant_id, account_name=user_email)
+    return render_template("users/bin.html", files=tenant_bin_files, tenant_id=tenant_id, account_name=mask_email(user_email))
 
 
 @app.route('/bin/restore/<document_id>', methods=['POST'])
@@ -2558,8 +2765,15 @@ def download_file(filename):
     )
     
     
-    # Create BytesIO object from blob data
-    file_data = BytesIO(file_record['file_data'])
+    # Create BytesIO object from decrypted blob data
+    raw_blob = file_record['file_data']
+    if isinstance(raw_blob, memoryview):
+        raw_blob = raw_blob.tobytes()
+    elif isinstance(raw_blob, bytearray):
+        raw_blob = bytes(raw_blob)
+
+    plain_file_data = decrypt_bytes(raw_blob)
+    file_data = BytesIO(plain_file_data)
     
     # Determine download name with proper extension
     mime_type = file_record.get('mime_type', 'application/octet-stream')
