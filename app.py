@@ -401,10 +401,12 @@ def sanitize_filename(filename):
 
 @app.route("/", methods=["GET", "POST"])
 def home():
+    user_email = session.get('email', 'Anonymous')
     log_audit_event(
         action_type='HOME_ACCESS',
-        description="User accessed home page",
-        category='USER_ACTIVITY'
+        description=f"User {user_email} accessed home page",
+        category='USER_ACTIVITY',
+        user_email=user_email
     )
     return render_template("front_page.html")
 
@@ -604,11 +606,12 @@ def myfiles():
     user_email = session.get('email', 'Unknown')
     files = get_uploaded_files()
 
-    #log audit event
-    log_audit_event(
-        action_type='FILE_LIST_ACCESS',
-        description=f"User accessed file list",
+    log_tenant_event(
+        action_type='TENANT_FILE_ACCESS',
+        description=f"User {user_email} accessed their file list",
         category='FILE_MANAGEMENT',
+        tenant_id=tenant_id,
+        user_email=user_email,
         target_resource='FILE_LIST',
         additional_data={'file_count': len(files)}
     )
@@ -686,15 +689,14 @@ def shared_with_me():
     except Exception as e:
         print(f"❌ Error loading shared files: {e}")
         #log audit event
-    log_tenant_event(
+
+    log_user_activity(
         action_type='SHARED_FILES_ACCESS',
-        description=f"User accessed shared files (tenant_{tenant_id})",
+        description=f"User accessed shared files list",
         category='FILE_MANAGEMENT',
         target_resource='SHARED_FILES',
-        tenant_id=tenant_id,
         additional_data={'shared_file_count': len(tenant_shares)}
     )
-    
     return render_template("users/shared_with_me.html", files=[], tenant_id=tenant_id, account_name=user_email)
 
 
@@ -2514,6 +2516,7 @@ def download_file(filename):
     from urllib.parse import unquote
     from io import BytesIO
     tenant_id = get_current_tenant()
+    user_email = session.get('email', 'Unknown')
     filename = unquote(filename)
     
     # Get file from database
@@ -2528,7 +2531,8 @@ def download_file(filename):
             target_resource='FILE',
             resource_id=filename,
             success=False,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            user_email=user_email
         )
 
         flash("File not found", "danger")
@@ -2541,7 +2545,8 @@ def download_file(filename):
         target_resource='FILE',
         resource_id=filename,
         additional_data={'file_size': file_record['file_size']},
-        tenant_id=tenant_id
+        tenant_id=tenant_id,
+        user_email=user_email
     )
     
     
@@ -4112,7 +4117,7 @@ def send_signup_verification_email(user_email, signup_code):
         print(f"❌ Signup email error: {str(e)}")
         return False
 
-
+#super admin codes-----------------------------------------------------------------------------------------
 #DLP Scanner-----------------------------------------------------------------------------------------------
 
 
@@ -4255,7 +4260,6 @@ def tenant_dlpscanning():
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             uniqueFilename = f"{timestamp}_{filename}"
             filePath = os.path.join(current_app.config['UPLOAD_FOLDER'], uniqueFilename)
-            
             try:
                 file.save(filePath)
                 savedFilePath = filePath
@@ -4356,7 +4360,6 @@ def systemHealthMonitor():
         return render_template('SuperAdmin/systemhealthmonitor.html', **error_data)
 
 def calculate_performance_metrics():
-    """Calculate real-time performance metrics"""
     try:
         metrics = {}
         response_times = list(performance_metrics['response_times'])
@@ -4367,7 +4370,6 @@ def calculate_performance_metrics():
             metrics['averageResponseTime'] = "0ms"
         total_api_requests = sum(performance_metrics['api_requests'].values())
         total_api_errors = sum(performance_metrics['api_errors'].values())
-        
         if total_api_requests > 0:
             error_rate = (total_api_errors / total_api_requests) * 100
             metrics['apiErrorRate'] = f"{error_rate:.1f}%"
@@ -4376,9 +4378,7 @@ def calculate_performance_metrics():
         metrics['totalAPIRequests'] = str(total_api_requests)
         metrics['totalRequests'] = str(performance_metrics['total_requests'])
         metrics['uptime'] = calculate_uptime()
-        
         return metrics
-        
     except Exception as e:
         print(f"Error calculating performance metrics: {e}")
         return {
@@ -4414,7 +4414,6 @@ def getSystemHealth():
             import psutil
             memory = psutil.virtual_memory()
             cpu_percent = psutil.cpu_percent(interval=1)
-            
             if memory.percent > 90 or cpu_percent > 90:
                 system_health = 25
             elif memory.percent > 80 or cpu_percent > 80:
@@ -4473,7 +4472,6 @@ def getSystemHealth():
             'totalRequests': perf_metrics.get('totalRequests', '0'),
             'requestsLast24h': str(db_perf_metrics.get('total_events_24h', 0))
         }
-        
     except Exception as e:
         return {
             'systemStatus': 0,
@@ -4495,18 +4493,15 @@ def getSystemHealth():
             'apiErrorRate': 'Error', 
             'totalAPIRequests': 'Error'
         }
-
+    
 def get_database_performance_metrics(hours=24):
-    """Get performance metrics from audit logs"""
     try:
-        from datetime import datetime, timedelta
-        
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
-        
+        from datetime import datetime, timedelta, timezone
+        SGT = timezone(timedelta(hours=8))
+        cutoff_time = datetime.now(SGT) - timedelta(hours=hours)
         audit_metrics = SysLogService.getSysStats(filters={
             'start_date': cutoff_time
         })
-        
         api_actions = [
             'FILE_UPLOAD', 'FILE_DOWNLOAD', 'FILE_DELETE', 'FILE_RENAME',
             'SHARE_LINK_GENERATED', 'DLP_SCAN', 'LOGIN_ATTEMPT'
@@ -4517,19 +4512,15 @@ def get_database_performance_metrics(hours=24):
                 limit=1000,
                 filters={'start_date': cutoff_time}
             )
-            
             api_requests = 0
             api_errors = 0
             response_times = []
-            
             for log in recent_logs.get('logs', []):
                 action_type = log.get('action_type', '')
                 if any(action in action_type for action in api_actions):
                     api_requests += 1
-                    
                     if not log.get('success', True):
                         api_errors += 1
-                    
                     if 'UPLOAD' in action_type:
                         response_times.append(250)
                     elif 'DOWNLOAD' in action_type:
@@ -4538,10 +4529,8 @@ def get_database_performance_metrics(hours=24):
                         response_times.append(500)
                     else:
                         response_times.append(50)   
-            
             avg_response = sum(response_times) / len(response_times) if response_times else 0
             error_rate = (api_errors / api_requests * 100) if api_requests > 0 else 0
-            
             return {
                 'database_api_requests': api_requests,
                 'database_api_errors': api_errors,
@@ -4549,11 +4538,9 @@ def get_database_performance_metrics(hours=24):
                 'database_avg_response': f"{avg_response:.1f}ms",
                 'total_events_24h': audit_metrics.get('total_events', 0)
             }
-            
         except Exception as e:
             print(f"Error analyzing audit logs: {e}")
             return {}
-            
     except Exception as e:
         print(f"Error getting database performance metrics: {e}")
         return {}
@@ -4578,7 +4565,6 @@ def checkDatabaseHealth():
             health_result = result.fetchone()
             end_time = time.time()
             query_latency_ms = round((end_time - start_time) * 1000, 2)
-            
             if health_result and health_result[0] == 1:
                 db_info = connection.execute(text("""
                     SELECT 
@@ -4610,7 +4596,6 @@ def checkDatabaseHealth():
                             (SELECT count(*) FROM pg_stat_activity) as total_connections,
                             (SELECT count(*) FROM pg_stat_activity WHERE state = 'idle') as idle_connections
                     """)).fetchone()
-                    
                     active_queries = perf_info[0] if perf_info else 0
                     total_connections = perf_info[1] if perf_info else 0
                     idle_connections = perf_info[2] if perf_info else 0
@@ -4628,7 +4613,6 @@ def checkDatabaseHealth():
                     health_percentage = 50
                 else:
                     health_percentage = 25
-
                 raw_server_ip = db_info[3] if db_info else "Unknown"
                 if raw_server_ip and raw_server_ip != "Unknown":
                     try:
@@ -4641,7 +4625,6 @@ def checkDatabaseHealth():
                         masked_ip = "xxx.xxx.xxx.xxx"
                 else:
                     masked_ip = "xxx.xxx.xxx.xxx"
-                
                 return {
                     'status': 1,
                     'health_percentage': health_percentage,
@@ -4683,7 +4666,6 @@ def checkDatabaseHealth():
             details = "Host connection issue - check Supabase URL"
         else:
             details = f"Database error: {error_message}"
-        
         return {
             'status': 0,
             'health_percentage': 0,
@@ -4720,33 +4702,27 @@ def checkAppHP():
             'systemStatus': 1 if system_health > 50 else 0,
             'databaseStatus': database_status,
             'appHP': 1,
-            
             'system_health_percentage': system_health,
             'database_health_percentage': db_health.get('health_percentage', 0),
             'app_health_percentage': app_health,
             'webserverStatus': app_health,  
-
             'database_details': db_health.get('details', {}),
             'database_message': db_health.get('message', ''),
-            
             'databaseQueryLatency': f"{db_metrics.get('query_latency_ms', 'Unknown')}ms",
             'active_db_connections': db_metrics.get('active_connections', 'Unknown'),
             'databaseSize': db_metrics.get('database_size', 'Unknown'),
             'total_db_connections': db_metrics.get('total_connections', 'Unknown'),
             'idle_db_connections': db_metrics.get('idle_connections', 'Unknown'),
             'active_queries': db_metrics.get('active_queries', 'Unknown'),
-            
             'system_info': {
                 'memory_percent': memory.percent if memory else 'Unknown',
                 'cpu_percent': cpu_percent if cpu_percent else 'Unknown',
                 'available_memory_gb': round(memory.available / (1024**3), 2) if memory else 'Unknown'
             },
-            
             'averageResponseTime': '17ms',  
             'apiErrorRate': '0.4%',        
             'totalAPIRequests': '6776'     
         }
-        
     except Exception as e:
         return {
             'systemStatus': 0,
@@ -4780,14 +4756,12 @@ def checkSystemHealth():
             'webserverStatus': 0
         }
     
-@csrf.exempt
 def getRecentErrorLogs(limit=10, hours=24):
     try:
-        from datetime import datetime, timedelta
-        
+        from datetime import datetime, timedelta, timezone
+        SGT = timezone(timedelta(hours=8))
+        cutoff_time = datetime.now(SGT) - timedelta(hours=hours)
         error_logs = []
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
-        
         try:
             system_error_result = SysLogService.getSysLogs(
                 limit=limit//2,
@@ -4798,12 +4772,10 @@ def getRecentErrorLogs(limit=10, hours=24):
                     'tenant_id': 'SYSTEM' 
                 }
             )
-            
             system_errors = system_error_result.get('logs', [])
-            
             for error in system_errors:
                 error_logs.append({
-                    'timestamp': error.get('created_at', datetime.utcnow()),
+                    'timestamp': error.get('created_at', datetime.now(SGT)), 
                     'code': 'SYS_' + str(error.get('id', '000')),
                     'description': error.get('action_description', 'System error'),
                     'category': error.get('action_category', 'SYSTEM'),
@@ -4827,7 +4799,7 @@ def getRecentErrorLogs(limit=10, hours=24):
                     continue
                 tenant_id = error.get('target_tenant_id', 'Unknown')
                 error_logs.append({
-                    'timestamp': error.get('created_at', datetime.utcnow()),
+                    'timestamp': error.get('created_at', datetime.now(SGT)),
                     'code': f"T{tenant_id}_" + str(error.get('id', '000')),
                     'description': error.get('action_description', 'Tenant error'),
                     'category': error.get('action_category', 'TENANT'),
@@ -4839,7 +4811,7 @@ def getRecentErrorLogs(limit=10, hours=24):
         db_health = checkDatabaseHealth()
         if db_health['status'] == 0:
             error_logs.append({
-                'timestamp': datetime.utcnow(),
+                'timestamp': datetime.now(SGT),
                 'code': 'DB_001',
                 'description': db_health.get('message', 'Database connection failed'),
                 'category': 'DATABASE',
@@ -4854,15 +4826,17 @@ def getRecentErrorLogs(limit=10, hours=24):
         try:
             last_scan_time = session.get('last_dlp_scan')
             if last_scan_time:
-                from datetime import datetime
                 if isinstance(last_scan_time, str):
                     last_scan = datetime.fromisoformat(last_scan_time)
+                    if last_scan.tzinfo is None:
+                        last_scan = last_scan.replace(tzinfo=timezone.utc).astimezone(SGT)
                 else:
                     last_scan = last_scan_time
-                    
-                if (datetime.utcnow() - last_scan).total_seconds() > 7200:  # 2 hours
+                    if last_scan.tzinfo is None:
+                        last_scan = last_scan.replace(tzinfo=timezone.utc).astimezone(SGT)
+                if (datetime.now(SGT) - last_scan).total_seconds() > 7200: 
                     error_logs.append({
-                        'timestamp': datetime.utcnow() - timedelta(hours=1),
+                        'timestamp': datetime.now(SGT) - timedelta(hours=1),
                         'code': 'DLP_001',
                         'description': 'DLP scanning service may be offline - no recent scans detected',
                         'category': 'SECURITY',
@@ -4871,16 +4845,14 @@ def getRecentErrorLogs(limit=10, hours=24):
                     })
         except Exception as e:
             print(f"Error checking DLP status: {e}")
-        error_logs.sort(key=lambda x: x.get('timestamp', datetime.min), reverse=True)
+        error_logs.sort(key=lambda x: x.get('timestamp', datetime.min.replace(tzinfo=SGT)), reverse=True)
         error_logs = error_logs[:limit]
-        
         return error_logs
-        
     except Exception as e:
         print(f"Error in getRecentErrorLogs: {e}")
         return [
             {
-                'timestamp': datetime.utcnow(),
+                'timestamp': datetime.now(SGT),
                 'code': 'LOG_ERROR',
                 'description': f'Failed to retrieve error logs: {str(e)}',
                 'category': 'SYSTEM',
@@ -4891,65 +4863,55 @@ def getRecentErrorLogs(limit=10, hours=24):
 
 def getRecentFileErrors(hours=24):
     try:
-        from datetime import datetime, timedelta
-        import os
-        import glob
-        
+        from datetime import datetime, timedelta, timezone
+        SGT = timezone(timedelta(hours=8))
         file_errors = []
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
-        
+        cutoff_time = datetime.now(SGT) - timedelta(hours=hours)
         temp_folder = app.config.get('PENDING_FOLDER', 'pending_uploads')
+        
         if os.path.exists(temp_folder):
             try:
                 abandoned_files = 0
                 corrupted_files = 0
-                
                 for filename in os.listdir(temp_folder):
                     file_path = os.path.join(temp_folder, filename)
                     if os.path.isfile(file_path):
                         try:
-                            file_created = datetime.fromtimestamp(os.path.getctime(file_path))
-                            file_age = datetime.now() - file_created
-                            
+                            file_created = datetime.fromtimestamp(os.path.getctime(file_path), tz=SGT)
+                            file_age = datetime.now(SGT) - file_created  
                             if file_age.total_seconds() > 3600:
                                 abandoned_files += 1
-                            
                             if os.path.getsize(file_path) == 0:
                                 corrupted_files += 1
-                                
                         except Exception as e:
                             print(f"Error checking file {filename}: {e}")
-                
                 if abandoned_files > 0:
                     file_errors.append({
-                        'timestamp': datetime.utcnow() - timedelta(minutes=30),
+                        'timestamp': datetime.now(SGT) - timedelta(minutes=30),
                         'code': 'FILE_001',
                         'description': f'{abandoned_files} abandoned temporary upload files detected',
                         'category': 'FILE_MANAGEMENT',
                         'severity': 'MEDIUM',
                         'source': 'File Upload System'
                     })
-                
                 if corrupted_files > 0:
                     file_errors.append({
-                        'timestamp': datetime.utcnow() - timedelta(minutes=15),
+                        'timestamp': datetime.now(SGT) - timedelta(minutes=15),
                         'code': 'FILE_002',
                         'description': f'{corrupted_files} corrupted/empty files found in temp directory',
                         'category': 'FILE_MANAGEMENT',
                         'severity': 'HIGH',
                         'source': 'File Integrity Check'
                     })
-                    
             except Exception as e:
                 file_errors.append({
-                    'timestamp': datetime.utcnow(),
+                    'timestamp': datetime.now(SGT),
                     'code': 'FILE_003',
                     'description': f'Error scanning temp directory: {str(e)}',
                     'category': 'FILE_MANAGEMENT',
                     'severity': 'LOW',
                     'source': 'File System Scanner'
                 })
-        
         upload_base = app.config.get('UPLOAD_FOLDER', 'uploads')
         if os.path.exists(upload_base):
             try:
@@ -4965,14 +4927,13 @@ def getRecentFileErrors(hours=24):
                                     os.remove(test_file)
                                 except PermissionError:
                                     file_errors.append({
-                                        'timestamp': datetime.utcnow(),
+                                        'timestamp': datetime.now(SGT),
                                         'code': 'FILE_004',
                                         'description': f'Write permission denied for {item}',
                                         'category': 'FILE_MANAGEMENT',
                                         'severity': 'HIGH',
                                         'source': 'Permission Check'
                                     })
-                                
                                 try:
                                     total_size = 0
                                     file_count = 0
@@ -4983,43 +4944,37 @@ def getRecentFileErrors(hours=24):
                                                 if os.path.exists(file_path):
                                                     total_size += os.path.getsize(file_path)
                                                     file_count += 1
-                                    
                                     if total_size > 1024**3:
                                         file_errors.append({
-                                            'timestamp': datetime.utcnow() - timedelta(minutes=5),
+                                            'timestamp': datetime.now(SGT) - timedelta(minutes=5),
                                             'code': 'FILE_005',
                                             'description': f'{item} storage usage high: {total_size/(1024**3):.1f}GB',
                                             'category': 'FILE_MANAGEMENT',
                                             'severity': 'MEDIUM',
                                             'source': 'Storage Monitor'
                                         })
-                                    
                                     if file_count > 1000:
                                         file_errors.append({
-                                            'timestamp': datetime.utcnow() - timedelta(minutes=10),
+                                            'timestamp': datetime.now(SGT) - timedelta(minutes=10),
                                             'code': 'FILE_006',
                                             'description': f'{item} has excessive files: {file_count} files',
                                             'category': 'FILE_MANAGEMENT',
                                             'severity': 'MEDIUM',
                                             'source': 'File Count Monitor'
                                         })
-                                        
                                 except Exception as e:
                                     print(f"Error calculating size for {item}: {e}")
-                                    
                             except Exception as e:
                                 print(f"Error checking tenant directory {item}: {e}")
-                                
             except Exception as e:
                 file_errors.append({
-                    'timestamp': datetime.utcnow(),
+                    'timestamp': datetime.now(SGT),
                     'code': 'FILE_007',
                     'description': f'Error scanning upload directories: {str(e)}',
                     'category': 'FILE_MANAGEMENT',
                     'severity': 'MEDIUM',
                     'source': 'Directory Scanner'
                 })
-        
         try:
             failed_file_ops_result = SysLogService.getSysLogs(
                 limit=50,
@@ -5030,22 +4985,19 @@ def getRecentFileErrors(hours=24):
                     'start_date': cutoff_time
                 }
             )
-            
             failed_file_ops = failed_file_ops_result.get('logs', [])
-            
             error_groups = {}
             for op in failed_file_ops:
                 action_type = op.get('action_type', 'UNKNOWN_FILE_ERROR')
                 if action_type not in error_groups:
                     error_groups[action_type] = {
                         'count': 0,
-                        'latest': op.get('created_at', datetime.utcnow()),
+                        'latest': op.get('created_at', datetime.now(SGT)),
                         'description': op.get('action_description', 'File operation failed')
                     }
                 error_groups[action_type]['count'] += 1
-            
             for action_type, data in error_groups.items():
-                if data['count'] > 1: 
+                if data['count'] > 1:
                     file_errors.append({
                         'timestamp': data['latest'],
                         'code': 'AUDIT_' + action_type.replace('_', '')[:6],
@@ -5054,10 +5006,8 @@ def getRecentFileErrors(hours=24):
                         'severity': 'HIGH' if data['count'] > 10 else 'MEDIUM',
                         'source': 'Audit Log Analysis'
                     })
-                    
         except Exception as e:
             print(f"Error checking audit logs for file errors: {e}")
-        
         try:
             metadata_file = FILE_METADATA_JSON  
             if os.path.exists(metadata_file):
@@ -5065,31 +5015,27 @@ def getRecentFileErrors(hours=24):
                     import json
                     with open(metadata_file, 'r') as f:
                         metadata = json.load(f)
-                    
                     orphaned_count = 0
                     for tenant_key, files in metadata.items():
                         if tenant_key.startswith('tenant_'):
                             tenant_id = tenant_key.split('_')[1]
                             tenant_folder = get_tenant_upload_folder(tenant_id)
-                            
                             for filename in files.keys():
                                 file_path = os.path.join(tenant_folder, filename)
                                 if not os.path.exists(file_path):
                                     orphaned_count += 1
-                    
                     if orphaned_count > 0:
                         file_errors.append({
-                            'timestamp': datetime.utcnow() - timedelta(minutes=20),
+                            'timestamp': datetime.now(SGT) - timedelta(minutes=20),
                             'code': 'META_001',
                             'description': f'{orphaned_count} orphaned metadata entries found',
                             'category': 'FILE_MANAGEMENT',
                             'severity': 'MEDIUM',
                             'source': 'Metadata Integrity Check'
                         })
-                        
                 except Exception as e:
                     file_errors.append({
-                        'timestamp': datetime.utcnow(),
+                        'timestamp': datetime.now(SGT),
                         'code': 'META_002',
                         'description': f'Error reading metadata file: {str(e)}',
                         'category': 'FILE_MANAGEMENT',
@@ -5098,12 +5044,10 @@ def getRecentFileErrors(hours=24):
                     })
         except Exception as e:
             print(f"Error checking metadata: {e}")
-        
         return file_errors
-        
     except Exception as e:
         return [{
-            'timestamp': datetime.utcnow(),
+            'timestamp': datetime.now(SGT),
             'code': 'FILE_SYSTEM_ERROR',
             'description': f'File error monitoring system failed: {str(e)}',
             'category': 'FILE_MANAGEMENT',
@@ -5113,30 +5057,22 @@ def getRecentFileErrors(hours=24):
 
 def getRecentTenantAlerts(limit=10):
 
-    "coconut"
-
-
-
-
-
+    """coconut"""
+    
     try:
-        from datetime import datetime, timedelta
-        
+        from datetime import datetime, timedelta, timezone
+        SGT = timezone(timedelta(hours=8)) 
         tenant_alerts = []
 
         try:
             tenants_result = db.session.execute(text("SELECT id, company_name FROM tenants WHERE is_active = true")).fetchall()
-            
             for tenant in tenants_result:
                 tenant_id = tenant[0]
                 company_name = tenant[1]
-                
                 try:
                     stats = get_tenant_stats(tenant_id)
-                    
                     total_events = stats.get('total_events', 0)
                     failed_events = stats.get('failed_events', 0)
-                    
                     if total_events > 0:
                         error_rate = (failed_events / total_events) * 100
                         if error_rate > 10:
@@ -5144,14 +5080,13 @@ def getRecentTenantAlerts(limit=10):
                                 'tenant_id': tenant_id,
                                 'company_name': company_name,
                                 'status': 'Warning',
-                                'cpu': f"{min(error_rate * 2, 100):.1f}",  
-                                'storage': f"{min(total_events / 10, 100):.1f}",  
+                                'cpu': f"{min(error_rate * 2, 100):.1f}",
+                                'storage': f"{min(total_events / 10, 100):.1f}",
                                 'errors': f"{error_rate:.1f}",
                                 'description': f'High error rate detected: {error_rate:.1f}% failure rate',
-                                'timestamp': datetime.utcnow()
+                                'timestamp': datetime.now(SGT)
                             })
-                        
-                        if total_events > 100:  
+                        if total_events > 100:
                             tenant_alerts.append({
                                 'tenant_id': tenant_id,
                                 'company_name': company_name,
@@ -5160,21 +5095,18 @@ def getRecentTenantAlerts(limit=10):
                                 'storage': '45',
                                 'errors': '5.4',
                                 'description': 'Bulk download pattern detected',
-                                'timestamp': datetime.utcnow() - timedelta(minutes=15)
+                                'timestamp': datetime.now(SGT) - timedelta(minutes=15)
                             })
-                
                 except Exception as e:
                     print(f"Error checking tenant {tenant_id}: {e}")
-                    
         except Exception as e:
             print(f"Error fetching tenant alerts: {e}")
-        
-    
-        tenant_alerts.sort(key=lambda x: x['timestamp'], reverse=True)
+        tenant_alerts.sort(key=lambda x: x.get('timestamp', datetime.min.replace(tzinfo=SGT)), reverse=True)
         return tenant_alerts[:limit]
-        
     except Exception as e:
         print(f"Error in getRecentTenantAlerts: {e}")
+        from datetime import datetime, timezone, timedelta
+        SGT = timezone(timedelta(hours=8))
         return [
             {
                 'tenant_id': 'ERR',
@@ -5184,14 +5116,13 @@ def getRecentTenantAlerts(limit=10):
                 'storage': '0', 
                 'errors': '100',
                 'description': f'Failed to load tenant alerts: {str(e)}',
-                'timestamp': datetime.utcnow()
+                'timestamp': datetime.now(SGT)
             }
         ]
 
 @csrf.exempt
 @app.route('/debug/syshpstatus')
 def debug_status():
-    """Enhanced debug endpoint with comprehensive system status"""
     try:
         health_metrics = getSystemHealth()
         
@@ -5261,63 +5192,41 @@ def system_admin_audit_dashboard():
 @app.route('/tenant/<int:tenant_id>/audit-logs')
 def tenant_audit_logs(tenant_id):
     try:
-        if session.get('tenant_id') != tenant_id:
-            flash("Access denied to this tenant's audit logs.", "danger")
+        if str(session.get('tenant_id')) != str(tenant_id):
             return redirect(url_for('login'))
-        category = request.args.get('category')
-        admin_email = request.args.get('admin_email')
-        start_date = request.args.get('start_date')
+
         page = int(request.args.get('page', 1))
-        per_page = int(request.args.get('per_page', 50))
-        filters = {
-            'tenant_id': str(tenant_id) 
-        }
-        if category:
-            filters['category'] = category
-        if admin_email:
-            filters['admin_email'] = admin_email
-        if start_date:
-            filters['start_date'] = datetime.fromisoformat(start_date)
+        per_page = 20
         offset = (page - 1) * per_page
-        result = SysLogService.getSysLogs(
-            limit=per_page, 
-            offset=offset, 
-            filters=filters
-        )
-        stats = SysLogService.getSysStats(filters)
-        tenant = db.session.execute(
-            text("SELECT company_name FROM tenants WHERE id = :id"),
-            {"id": tenant_id}
-        ).first()
-        tenant_name = tenant.company_name if tenant else None
-        SysLogService.logTenantEvent(
+        filters = {'tenant_id': str(tenant_id)}
+        if request.args.get('user_email'):
+            filters['admin_email'] = request.args.get('user_email')
+        if request.args.get('category'):
+            filters['category'] = request.args.get('category')
+        if request.args.get('start_date'):
+            filters['start_date'] = request.args.get('start_date')
+        result = SysLogService.getSysLogs(limit=per_page, offset=offset, filters=filters)
+        stats = SysLogService.getSysStats(filters={'tenant_id': str(tenant_id)})
+        tenant = Tenant.query.get(tenant_id)
+        tenant_name = tenant.company_name if tenant else f'Tenant {tenant_id}'
+        return render_template(
+            'CompanyAdmin/tenant_auditlogs.html',
+            logs=result['logs'],        
+            stats=stats,
             tenant_id=tenant_id,
-            action_type='TENANT_ACCESS',
-            description="Tenant admin accessed audit logs dashboard"
+            tenant_name=tenant_name,
+            categories=SysLogService.CATEGORIES,
+            total_count=result['total_count'],
+            current_page=page,
+            per_page=per_page,
+            has_more=result['has_more']
         )
-        return render_template('CompanyAdmin/tenant_auditlogs.html',
-                             logs=result['logs'],
-                             total_count=result['total_count'],
-                             has_more=result['has_more'],
-                             current_page=page,
-                             per_page=per_page,
-                             stats=stats,
-                             categories=SysLogService.CATEGORIES,
-                             action_types=SysLogService.ACTION_TYPES,
-                             tenant_id=str(tenant_id),
-                             tenant_name=tenant_name)
     except Exception as e:
-        SysLogService.logTenantEvent(
-            tenant_id=tenant_id,
-            action_type='TENANT_ACCESS',
-            description=f"Failed to access tenant audit logs: {str(e)}",
-            success=False
-        )
-        flash(f"Error loading tenant audit logs: {str(e)}", "error")
-        return render_template('CompanyAdmin/tenant_auditlogs.html', 
-                             logs=[], 
-                             total_count=0,
-                             tenant_id=str(tenant_id))
+        print(f"Tenant audit log error: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error loading audit logs: {str(e)}", "danger")
+        return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
 
 def log_system_admin_event(action_type, description, category='GENERAL', **kwargs):
     try:
@@ -5338,12 +5247,15 @@ def log_system_admin_event(action_type, description, category='GENERAL', **kwarg
 def log_tenant_event(action_type, description, category='GENERAL', tenant_id=None, **kwargs):
     try:
         ip_address = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', 'Unknown'))
-        user_email = session.get('email') or session.get('temp_user_email')
+        user_email = (
+            kwargs.pop('user_email', None) or
+            session.get('email') or 
+            session.get('temp_user_email') or
+            'Unknown'
+        )
         tenant_id = tenant_id or session.get('tenant_id')
-        
         if not tenant_id:
             raise ValueError("No tenant_id provided for tenant event")
-            
         SysLogService.logTenantEvent(
             tenant_id=tenant_id,
             action_type=action_type,
@@ -5358,32 +5270,52 @@ def log_tenant_event(action_type, description, category='GENERAL', tenant_id=Non
 
 def log_audit_event(action_type, description, category='GENERAL', force_system=False, force_tenant=False, **kwargs):
     try:
+        user_email = session.get('email') or session.get('temp_user_email') or 'Unknown'
+        user_id = session.get('user_id') or 'Unknown'
+        if 'user_email' not in kwargs:
+            kwargs['user_email'] = user_email
+        if 'user_id' not in kwargs:
+            kwargs['user_id'] = user_id
         if force_system:
             return log_system_admin_event(action_type, description, category, **kwargs)
-        
         if force_tenant:
             return log_tenant_event(action_type, description, category, **kwargs)
         
         user_type = session.get('user_type')
         tenant_id = session.get('tenant_id')
-        
         current_route = request.endpoint or ''
-        
         if (user_type == 'system_admin' or 
             current_route.startswith('system_') or 
             'SuperAdmin' in current_route or
             (not tenant_id and user_type != 'user')):
-            
             return log_system_admin_event(action_type, description, category, **kwargs)
-        
         elif tenant_id and (user_type in ['tenant_admin', 'user']):
             return log_tenant_event(action_type, description, category, tenant_id=tenant_id, **kwargs)
-        
         else:
             return log_system_admin_event(action_type, f"[AUTO_DETECT] {description}", category, **kwargs)
             
     except Exception as e:
         current_app.logger.error(f"Audit logging error: {e}")
+
+def get_current_user_info():
+    return {
+        'user_email': session.get('email', 'Unknown'),
+        'user_id': session.get('user_id', 'Unknown'),
+        'tenant_id': session.get('tenant_id'),
+        'user_role': session.get('user_role', 'Unknown'),
+        'ip_address': request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr)
+    }
+
+def log_user_activity(action_type, description, category='USER_ACTIVITY', **kwargs):
+    user_info = get_current_user_info()
+    log_data = {**user_info, **kwargs}
+    
+    return log_audit_event(
+        action_type=action_type,
+        description=description,
+        category=category,
+        **log_data
+    )
 
 # Dashboard ===========================================================
 
@@ -5403,8 +5335,7 @@ def system_dashboard():
     if session.get('user_type') != 'superadmin':
         flash('Access denied. System admin privileges required.', 'error')
         return redirect(url_for('home'))
-    
-    # Log the access
+
     SysLogService.logTheEvent(
         action_type='SYSTEM_DASHBOARD_ACCESS',
         description=f'System admin accessed monitoring dashboard',

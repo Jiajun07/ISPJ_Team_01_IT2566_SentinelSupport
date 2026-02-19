@@ -4,10 +4,11 @@ import re
 from sqlalchemy.exc import SQLAlchemyError
 from database import MasterSessionLocal, db
 from models import SystemAuditLog
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from flask import request, session, g
 
 logger = logging.getLogger(__name__)
+SGT = timezone(timedelta(hours=8))
 
 class SysLogService:
     ACTION_TYPES = {
@@ -74,6 +75,11 @@ class SysLogService:
         'HIGH': 'HIGH',
         'CRITICAL': 'CRITICAL'
     }
+    @staticmethod
+    def getCurrentTimestamp():
+        now = datetime.now(SGT)
+        truncated = now.replace(microsecond=(now.microsecond // 10000) * 10000)
+        return truncated
 
     @staticmethod
     def mask_sensitive_data(data, field_type=None):
@@ -144,7 +150,7 @@ class SysLogService:
                 before_state=json.dumps(kwargs.get('before_state')) if kwargs.get('before_state') else None,
                 after_state=json.dumps(kwargs.get('after_state')) if kwargs.get('after_state') else None,
                 additional_data=json.dumps(kwargs.get('additional_data')) if kwargs.get('additional_data') else None,
-                created_at=datetime.utcnow()
+                created_at=SysLogService.getCurrentTimestamp()
             )
             with MasterSessionLocal() as db_session:
                 db_session.add(audit_entry)
@@ -167,28 +173,32 @@ class SysLogService:
                     masked_kwargs[key] = SysLogService.mask_sensitive_data(value, 'sensitive')
                 elif key == 'ip_address':
                     masked_kwargs[key] = SysLogService.mask_sensitive_data(value, 'ip')
-                elif 'email' in key.lower():
-                    masked_kwargs[key] = SysLogService.mask_sensitive_data(value, 'email')
                 elif 'hash' in key.lower():
                     masked_kwargs[key] = SysLogService.mask_sensitive_data(value, 'hash')
                 else:
                     masked_kwargs[key] = value
-            masked_admin_email = SysLogService.mask_sensitive_data(admin_email, 'email') if admin_email else None
-            with MasterSessionLocal() as session:
+            with MasterSessionLocal() as db_session:
                 log_entry = SystemAuditLog(
-                    admin_email=masked_admin_email,
+                    admin_email=admin_email,  
                     action_type=action_type,
                     action_description=description,
                     action_category=category,
                     target_tenant_id=str(tenant_id),
                     ip_address=masked_kwargs.get('ip_address'),
                     success=masked_kwargs.get('success', True),
+                    target_resource=masked_kwargs.get('target_resource'),
+                    resource_id=masked_kwargs.get('resource_id'),
+                    additional_data=json.dumps(masked_kwargs.get('additional_data')) if masked_kwargs.get('additional_data') else None,
+                    created_at=SysLogService.getCurrentTimestamp()
                 )
-                session.add(log_entry)
-                session.commit()
+                db_session.add(log_entry)
+                db_session.commit()
+                print(f"Tenant log: [{action_type}] user={admin_email} tenant={tenant_id}")
                 
         except Exception as e:
             print(f" Audit logging error: {e}")
+            import traceback
+            traceback.print_exc()
     
     @staticmethod
     def getSysLogs(limit=100, offset=0, filters=None):

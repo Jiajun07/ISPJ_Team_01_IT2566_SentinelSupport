@@ -54,10 +54,7 @@
     </div>
     
     <script>
-        // Open Grafana in new tab
         window.open('http://localhost:3000', '_blank');
-        
-        // Redirect back to control panel after 3 seconds
         setTimeout(function() {
             window.location.href = '{{ url_for("superadmincontrolpanel") }}';
         }, 3000);
