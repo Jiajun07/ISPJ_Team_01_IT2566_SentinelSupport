@@ -132,7 +132,6 @@
                                             <form method="POST" action="{{ url_for('backup_delete', tenant_id=tenant_id, filename=backup.file) }}"
                                                   style="display: inline;" onsubmit="return confirm('Are you sure you want to permanently delete this backup snapshot?')">
                                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                                <button type="submit" class="btn btn-outline-danger" title="Delete from server">🗑️ Delete</button>
                                             </form>
                                         </div>
                                     </td>
@@ -157,4 +156,33 @@
         </div>
     </div>
 </div>
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        // Record how many backups are currently on the page
+        const currentBackupCount = {{ backups|length if backups else 0 }};
+        const tenantId = "{{ tenant_id }}";
+
+        // Function to check the server for new backups
+        async function checkForNewBackups() {
+            try {
+                const response = await fetch(`/api/tenant/${tenantId}/backup-count`);
+                if (response.ok) {
+                    const data = await response.json();
+
+                    // If the server has MORE backups than our page currently shows...
+                    if (data.count > currentBackupCount) {
+                        console.log("New automatic backup detected! Reloading page...");
+                        // Reload the page to show the new backup in the dropdown/table
+                        window.location.reload();
+                    }
+                }
+            } catch (error) {
+                console.error("Error checking for backups:", error);
+            }
+        }
+
+        // Check every 30 seconds (30000 milliseconds)
+        setInterval(checkForNewBackups, 30000);
+    });
+</script>
 {% endblock %}

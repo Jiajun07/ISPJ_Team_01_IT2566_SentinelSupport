@@ -2617,6 +2617,15 @@ scheduler = BackgroundScheduler()
 scheduler.start()
 
 
+@app.route('/api/tenant/<int:tenant_id>/backup-count')
+def api_backup_count(tenant_id):
+    """Lightweight endpoint for the frontend to check if a new backup was created"""
+    if str(session.get('tenant_id')) != str(tenant_id):
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    backups = get_tenant_backups(tenant_id)
+    return jsonify({'count': len(backups)})
+
 @app.route('/tenant/<int:tenant_id>/cleanup-retention')
 def run_retention_cleanup(tenant_id):
     if session.get('tenant_id') != tenant_id:

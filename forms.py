@@ -52,7 +52,6 @@ class AddTenantUserForm(FlaskForm):
     ])
     role = SelectField('Role', choices=[
         ('user', 'User (Standard)'),
-        ('admin', 'Admin (Full Access)')
     ], default='user')
     submit = SubmitField('Create User')
 
