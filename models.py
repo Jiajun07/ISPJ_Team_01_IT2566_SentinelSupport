@@ -1,10 +1,15 @@
 from database import db
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
 Base = declarative_base()
+SGT = timezone(timedelta(hours=8))
+
+def sgt_now():
+    now = datetime.now(SGT)
+    return now.replace(microsecond=(now.microsecond // 10000) * 10000)
 
 class SystemAuditLog(db.Model):
     __tablename__ = 'system_audit_logs'
@@ -24,16 +29,27 @@ class SystemAuditLog(db.Model):
     before_state = db.Column(db.Text, nullable=True)  
     after_state = db.Column(db.Text, nullable=True)   
     additional_data = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=sgt_now, nullable=False, index=True)
     
     def __repr__(self):
         return f'<SystemAuditLog {self.id}: {self.action_type} by {self.admin_email}>'
     
     def to_dict(self):
+        if self.created_at:
+            if self.created_at.tzinfo is None:
+                created_at_sgt = self.created_at.replace(tzinfo=timezone.utc).astimezone(SGT)
+            else:
+                created_at_sgt = self.created_at.astimezone(SGT)
+            created_at_str = created_at_sgt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-4] 
+        else:
+            created_at_str = None
+
         return {
             'id': self.id,
             'admin_id': self.admin_id,
             'admin_email': self.admin_email,
+            'user_email': self.admin_email,
+            'user_id': self.admin_id,
             'action_type': self.action_type,
             'action_category': self.action_category,
             'action_description': self.action_description,
@@ -45,7 +61,7 @@ class SystemAuditLog(db.Model):
             'before_state': self.before_state,
             'after_state': self.after_state,
             'additional_data': self.additional_data,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'created_at': created_at_str 
         }
     
 class ComplianceReport(Base):
@@ -57,7 +73,7 @@ class ComplianceReport(Base):
     report_period_end = Column(DateTime, nullable=False)
     status = Column(String(20), default='DRAFT')
     generated_by = Column(String(100), nullable=False)
-    generated_at = Column(DateTime, default=datetime.utcnow)
+    generated_at = Column(DateTime, default=sgt_now)
     approved_by = Column(String(100))
     approved_at = Column(DateTime)
     file_path = Column(String(500))
@@ -69,7 +85,7 @@ class ComplianceMetric(Base):
     tenant_id = Column(Integer, nullable=False)
     metric_type = Column(String(50), nullable=False)
     metric_value = Column(String(200), nullable=False)
-    recorded_at = Column(DateTime, default=datetime.utcnow)
+    recorded_at = Column(DateTime, default=sgt_now)
     compliance_framework = Column(String(50))
     description = Column(Text)
 
@@ -79,7 +95,7 @@ class ComplianceViolation(Base):
     tenant_id = Column(Integer, nullable=False)
     violation_type = Column(String(100), nullable=False)
     severity = Column(String(20))
-    detected_at = Column(DateTime, default=datetime.utcnow)
+    detected_at = Column(DateTime, default=sgt_now)
     resolved_at = Column(DateTime)
     status = Column(String(20), default='OPEN')
     description = Column(Text)

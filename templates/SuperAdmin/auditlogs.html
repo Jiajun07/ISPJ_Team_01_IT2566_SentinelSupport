@@ -49,7 +49,6 @@
 <div class="container-fluid mt-4 px-0">
     <div class="row g-0">
         <div class="col-12">
-            <!-- Header Section -->
             <div class="d-flex justify-content-between align-items-center mb-4 px-4">
                 <h2 class="text-dark fw-bold">
                     <i class="fas fa-shield-alt text-primary me-2"></i>System Audit Logs
@@ -57,7 +56,6 @@
                 </h2>
             </div>
 
-            <!-- Statistics Cards -->
             <div class="stats-container mb-4 px-4">
                 <div class="stats-card-item">
                     <div class="card border-0 shadow-sm h-100 stats-card">
@@ -113,7 +111,6 @@
                 </div>
             </div>
 
-            <!-- Filters Section -->
             <div class="card border-0 shadow-sm mb-4 mx-4">
                 <div class="card-body">
                     <form method="GET" class="row g-3 align-items-end">
@@ -159,7 +156,6 @@
                 </div>
             </div>
 
-            <!-- Full Width Table -->
             <div class="card border-0 shadow-sm mx-4">
                 <div class="card-body p-0">
                     <div class="table-responsive full-width-table">
@@ -186,10 +182,22 @@
                                 <tr class="{% if not log.success %}table-danger table-danger-subtle{% endif %}">
                                     <td class="px-4 py-3">
                                         <div class="text-dark fw-medium">
-                                            {{ log.created_at[:10] if log.created_at else '' }}
+                                            {% if log.created_at %}
+                                            {% if log.created_at is string %}
+                                            {{ log.created_at[:10] }}
+                                            {% else %}
+                                            {{ log.created_at.strftime('%Y-%m-%d') }}
+                                            {% endif %}
+                                            {% endif %}
                                         </div>
                                         <small class="text-muted">
-                                            {{ log.created_at[11:16] if log.created_at else '' }}
+                                            {% if log.created_at %}
+                                            {% if log.created_at is string %}
+                                            {{ log.created_at[11:16] }}
+                                            {% else %}
+                                            {{ log.created_at.strftime('%H:%M') }}
+                                            {% endif %}
+                                            {% endif %}
                                         </small>
                                     </td>
                                     <td class="px-4 py-3">
@@ -283,46 +291,48 @@
                         </table>
                     </div>
 
-                    <!-- Pagination -->
                     {% if total_count and total_count > 0 %}
-                    <div class="d-flex justify-content-between align-items-center p-4 border-top">
+                    {% set total_pages = (total_count / per_page)|round(0, 'ceil')|int %}
+                    <div class="d-flex justify-content-between align-items-center p-4 border-top flex-wrap gap-2">
                         <div class="text-muted">
                             Showing {{ ((current_page - 1) * per_page) + 1 }} to
                             {{ current_page * per_page if current_page * per_page < total_count else total_count }} of
                                 {{ total_count }} entries </div>
                                 <nav>
-                                    <ul class="pagination pagination-sm mb-0">
-                                        {% if current_page > 1 %}
-                                        <li class="page-item">
-                                            <a class="page-link"
-                                                href="?page={{ current_page - 1 }}{% for key, value in request.args.items() %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                                <i class="fas fa-chevron-left"></i>
-                                            </a>
-                                        </li>
-                                        {% endif %}
-
-                                        {% set start_page = [current_page - 2, 1]|max %}
-                                        {% set end_page = [current_page + 2, (total_count / per_page)|round(0,
-                                        'ceil')|int]|min %}
-
-                                        {% for page_num in range(start_page, end_page + 1) %}
-                                        <li class="page-item {% if page_num == current_page %}active{% endif %}">
-                                            <a class="page-link"
-                                                href="?page={{ page_num }}{% for key, value in request.args.items() %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                                {{ page_num }}
-                                            </a>
-                                        </li>
-                                        {% endfor %}
-
-                                        {% if has_more %}
-                                        <li class="page-item">
-                                            <a class="page-link"
-                                                href="?page={{ current_page + 1 }}{% for key, value in request.args.items() %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">
-                                                <i class="fas fa-chevron-right"></i>
-                                            </a>
-                                        </li>
-                                        {% endif %}
-                                    </ul>
+                                    <div class="d-flex align-items-center gap-1">
+                                        <a class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}"
+                                            href="?page=1{% for key, value in request.args.items() %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
+                                            title="First Page">
+                                            <i class="fas fa-angle-double-left"></i>
+                                        </a>
+                                        <a class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}"
+                                            href="?page={{ current_page - 1 }}{% for key, value in request.args.items() %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
+                                            title="Previous Page">
+                                            <i class="fas fa-chevron-left"></i>
+                                        </a>
+                                        <form method="GET" class="d-flex align-items-center mx-2" id="pageJumpForm">
+                                            {% for key, value in request.args.items() %}
+                                            {% if key != 'page' %}
+                                            <input type="hidden" name="{{ key }}" value="{{ value }}">
+                                            {% endif %}
+                                            {% endfor %}
+                                            <span class="text-muted me-2 small">Page</span>
+                                            <input type="number" name="page" value="{{ current_page }}" min="1"
+                                                max="{{ total_pages }}" class="form-control form-control-sm text-center"
+                                                style="width: 65px;" onchange="this.form.submit()" title="Go to page">
+                                            <span class="text-muted ms-2 small">of {{ total_pages }}</span>
+                                        </form>
+                                        <a class="btn btn-sm btn-outline-secondary {% if not has_more %}disabled{% endif %}"
+                                            href="?page={{ current_page + 1 }}{% for key, value in request.args.items() %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
+                                            title="Next Page">
+                                            <i class="fas fa-chevron-right"></i>
+                                        </a>
+                                        <a class="btn btn-sm btn-outline-secondary {% if not has_more %}disabled{% endif %}"
+                                            href="?page={{ total_pages }}{% for key, value in request.args.items() %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}"
+                                            title="Last Page">
+                                            <i class="fas fa-angle-double-right"></i>
+                                        </a>
+                                    </div>
                                 </nav>
                         </div>
                         {% endif %}
@@ -360,7 +370,6 @@
             z-index: 1000;
         }
 
-        /* Full Width Table Styles */
         .full-width-table {
             width: 100%;
             overflow-x: auto;
@@ -372,7 +381,6 @@
             table-layout: auto;
         }
 
-        /* Container adjustments for full width */
         .container-fluid.px-0 {
             padding-left: 0 !important;
             padding-right: 0 !important;
@@ -383,7 +391,6 @@
             --bs-gutter-y: 0;
         }
 
-        /* Spacing for content inside full width */
         .px-4 {
             padding-left: 1.5rem !important;
             padding-right: 1.5rem !important;
@@ -394,20 +401,15 @@
             margin-right: 1.5rem !important;
         }
 
-        /* ✅ WORKING: Stats Cards Layout - Pure Flexbox with 20px gaps */
-
         .stats-container {
             display: flex;
             gap: 20px;
-            /* Exactly 20px gap between cards */
             margin-bottom: 2rem;
         }
 
         .stats-card-item {
             flex: 1;
-            /* Each card takes equal space */
             min-width: 0;
-            /* Allow shrinking */
         }
 
         .stats-card {
@@ -465,7 +467,6 @@
             font-size: 1.5rem;
         }
 
-        /* ✅ Responsive Design */
         @media (max-width: 1200px) {
 
             .full-width-table .table td,
@@ -484,20 +485,17 @@
 
             .stats-container {
                 gap: 15px;
-                /* Slightly smaller gap on large tablets */
             }
         }
 
         @media (max-width: 992px) {
             .stats-container {
                 flex-wrap: wrap;
-                /* Allow wrapping on tablets */
                 gap: 15px;
             }
 
             .stats-card-item {
                 flex: 0 0 calc(50% - 7.5px);
-                /* 2 cards per row */
             }
 
             .stats-number {
@@ -529,7 +527,6 @@
 
             .stats-card-item {
                 flex: none;
-                /* Reset flex for mobile */
                 width: 100%;
             }
 
@@ -562,7 +559,6 @@
             }
         }
 
-        /* Enhanced Form Styling */
         .custom-input,
         .custom-select {
             border: 2px solid #e9ecef;
@@ -645,7 +641,6 @@
             background-color: #f8f9fa !important;
         }
 
-        /* Pagination Styling */
         .pagination .page-link {
             border: none;
             color: #6c757d;
@@ -667,7 +662,6 @@
             transform: translateY(-1px);
         }
 
-        /* Empty State Styling */
         .text-center .fas.fa-inbox {
             color: #dee2e6;
         }

@@ -24,7 +24,11 @@ class TenantSecurity(db.Model):
     tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), unique=True)
     mfa_enabled = db.Column(db.Boolean, default=False)
     dlp_enabled = db.Column(db.Boolean, default=False)
-    dlp_rule_count = db.Column(db.Integer, default=0)
+    dlp_monitor_only = db.Column(db.Boolean, default=True)
+    dlp_notify_user = db.Column(db.Boolean, default=False)
+    dlp_require_approval = db.Column(db.Boolean, default=False)
+    dlp_block_action = db.Column(db.Boolean, default=False)
+    dlp_trigger_incident = db.Column(db.Boolean, default=False)
     data_retention_days = db.Column(db.Integer, default=365)
     rls_enabled = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))  # ✅
@@ -268,13 +272,16 @@ def get_tenant_stats(tenant_id):
     '''), {'today': today}).scalar() or 0
 
     return {
-        'total_users': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".users')).scalar(),
-        'total_documents': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".documents')).scalar(),
-        'audit_logs': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".audit_logs')).scalar(),  # ✅ NEW LINE
+        'total_users': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".users')).scalar() or 0,
+
+        # 🔥 FIXED: Now points to the 'files' table and ignores soft-deleted files in the bin
+        'total_documents': db.session.execute(
+            text(f'SELECT COUNT(*) FROM "{schema_name}".files WHERE is_deleted = FALSE')).scalar() or 0,
+
+        'audit_logs': db.session.execute(text(f'SELECT COUNT(*) FROM "{schema_name}".audit_logs')).scalar() or 0,
         'cleaned_today': cleaned_today,
         'retention_days': security.data_retention_days if security else 365
     }
-
 
 
 # Raw engine for non-Flask context (tests)

@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from 'bootstrap5/form.html' import render_form_field %}
 
 {% block title %}Verify 2FA - SentinelSupport{% endblock %}
 
@@ -31,14 +30,22 @@
 
                     <!-- 2FA Form -->
                     <form method="POST" action="{{ url_for('verify_2fa') }}">
-                        {{ form.hidden_tag() }}
-
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                         <div class="mb-4">
-                            {{ render_form_field(form.code, class="form-control form-control-lg text-center fw-bold",
-                                              placeholder="000000", maxlength="6") }}
+                            <label for="code" class="form-label fw-semibold">6-Digit Code</label>
+                            <input type="text" 
+                                   id="code"
+                                   name="code" 
+                                   class="form-control form-control-lg text-center fw-bold"
+                                   placeholder="000000" 
+                                   maxlength="6"
+                                   pattern="[0-9]{6}"
+                                   inputmode="numeric"
+                                   autocomplete="one-time-code"
+                                   required>
                             <div class="form-text text-center">
                                 Didn't receive code?
-                                <a href="{{ url_for('resend_2fa') }}" class="text-primary fw-semibold"
+                                <a href="#" class="text-primary fw-semibold"
                                    onclick="resendCode(event)">Resend Code</a>
                             </div>
                         </div>

@@ -1,0 +1,12 @@
+CONFIDENTIAL INTERNAL MEMO
+
+We need to process the refund to bank account #99887766.
+The refund is for the credit card ending in 4001.
+
+Admin credentials:
+User: admin
+Password: J4#m9!pL2@vR5$x
+Api Key: ak_live_8f7d6e5c4b3a2918
+
+Identity Verification:
+The customer's NRIC is S1234567D and they can be reached at 912-555-0909.
