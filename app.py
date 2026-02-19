@@ -1702,7 +1702,6 @@ def check_dlp_enforcement(file_path, tenant_id, original_filename):
         if extracted_text:
             matches = dlpScanner.scan_text(extracted_text)
             risk_result = dlpScanner.calculateRisk(matches)
-            # Safe get to prevent 'NoneType' errors if scanner returns None
             if risk_result:
                 risk_level = risk_result.get("level", "Low")
 
@@ -1715,14 +1714,11 @@ def check_dlp_enforcement(file_path, tenant_id, original_filename):
     if not security_policy:
         security_policy = TenantSecurity(dlp_monitor_only=True)
 
-    # 4. Determine Action
+    # 4. Determine Action (Removed JUSTIFY)
     if risk_level in ["Critical", "High", "Medium"]:
         if security_policy.dlp_block_action:
             action = "BLOCK"
             message = f"⛔ Upload Blocked: File contains {risk_level} risk data."
-        elif security_policy.dlp_require_approval:
-            action = "JUSTIFY"
-            message = f"⚠️ Justification Required: {risk_level} risk detected."
         elif security_policy.dlp_notify_user:
             action = "WARN"
             message = "🛡️ Caution: Sensitive data involved."
@@ -1873,7 +1869,7 @@ def confirm_upload(temp_id):
         # 1. ENFORCE DLP BASELINE CHECK
         action, message, risk_level, _ = check_dlp_enforcement(pending_path, tenant_id, original_name)
 
-        # 🛑 2. IF BLOCKED: Delete file and force the HTML Popup Response
+        # 🛑 2. IF BLOCKED
         if action == "BLOCK":
             log_tenant_event('DLP_UPLOAD_BLOCKED', f"Blocked {original_name} ({risk_level})", 'SECURITY',
                              tenant_id=tenant_id, user_id=user_id, success=False)
@@ -1882,7 +1878,6 @@ def confirm_upload(temp_id):
             except:
                 pass
 
-            # FOOLPROOF POPUP RESPONSE
             return f"""
             <html><head><title>Blocked</title><style>
                 body {{ font-family: sans-serif; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
@@ -1903,18 +1898,54 @@ def confirm_upload(temp_id):
             </body></html>
             """, 403
 
-        # ⚠️ JUSTIFY
-        justification = request.form.get('justification', '').strip()
-        if action == "JUSTIFY" and not justification:
-            flash("❌ Justification is required for this file.", "danger")
-            return redirect(f"/upload/confirm/{temp_id}?tenant={tenant_id}")
+        # ⚠️ 3. IF WARN
+        if action == "WARN" and request.form.get('confirmed_warning') != 'true':
+            name_val = request.form.get('name', '').replace('"', '&quot;')
+            sens_val = request.form.get('sensitivity', '').replace('"', '&quot;')
+            owner_val = request.form.get('owner', '').replace('"', '&quot;')
+            notes_val = request.form.get('notes', '').replace('"', '&quot;')
+            risk_type_val = request.form.get('risk_type', '').replace('"', '&quot;')
 
-        notes = request.form.get('notes', '').strip()
-        if justification:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            notes = f"[JUSTIFICATION {timestamp}]: {justification}\n{notes}"
+            return f"""
+            <html><head><title>Warning</title><style>
+                body {{ font-family: sans-serif; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
+                .box {{ background: white; padding: 40px; border-radius: 12px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-width: 450px; width: 90%; }}
+                h2 {{ color: #f57c00; margin-top: 10px; font-weight: 800; }}
+                p {{ color: #333; font-size: 16px; font-weight: 500; margin-bottom: 15px; }}
+                .sub {{ font-size: 14px; color: #6c757d; margin-bottom: 25px; }}
+                .btn-container {{ display: flex; gap: 10px; }}
+                .btn {{ flex: 1; border: none; padding: 14px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: bold; text-decoration: none; display: block; box-sizing: border-box; }}
+                .btn-yes {{ background: #f57c00; color: white; }}
+                .btn-yes:hover {{ background: #e65100; }}
+                .btn-no {{ background: #6c757d; color: white; }}
+                .btn-no:hover {{ background: #5a6268; }}
+            </style></head><body>
+                <div class="box">
+                    <div style="font-size: 60px; line-height: 1; margin-bottom: 15px;">⚠️</div>
+                    <h2>Security Warning</h2>
+                    <p>{message}</p>
+                    <div class="sub">Are you sure you want to proceed with uploading this sensitive file?</div>
+
+                    <form method="POST" action="/upload/confirm/{temp_id}?tenant={tenant_id}" style="margin:0;">
+                        <input type="hidden" name="name" value="{name_val}">
+                        <input type="hidden" name="sensitivity" value="{sens_val}">
+                        <input type="hidden" name="owner" value="{owner_val}">
+                        <input type="hidden" name="notes" value="{notes_val}">
+                        <input type="hidden" name="risk_type" value="{risk_type_val}">
+                        <input type="hidden" name="confirmed_warning" value="true">
+
+                        <div class="btn-container">
+                            <a href="/myfiles" class="btn btn-no">No, Cancel</a>
+                            <button type="submit" class="btn btn-yes">Yes, Upload</button>
+                        </div>
+                    </form>
+                </div>
+            </body></html>
+            """, 200
 
         # Proceed to Save
+        notes = request.form.get('notes', '').strip()
+
         try:
             with open(pending_path, 'rb') as f:
                 file_data = f.read()
