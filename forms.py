@@ -52,7 +52,6 @@ class AddTenantUserForm(FlaskForm):
     ])
     role = SelectField('Role', choices=[
         ('user', 'User (Standard)'),
-        ('admin', 'Admin (Full Access)')
     ], default='user')
     submit = SubmitField('Create User')
 
@@ -134,8 +133,6 @@ class BackupScheduleForm(FlaskForm):
     )
     backup_time = StringField('Time (HH:MM)', validators=[DataRequired()])
     enable_scheduled = BooleanField('Enable scheduled backups')
-    scope_full = BooleanField('Full tenant data', default=True)
-    scope_compliance = BooleanField('Compliance metadata only')
     retention_days = IntegerField(
         'Retention (days)',
         default=30,

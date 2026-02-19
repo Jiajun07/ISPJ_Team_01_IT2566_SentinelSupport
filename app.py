@@ -61,6 +61,10 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
+# 🔥 ENHANCED SESSION SECURITY
+app.config['SESSION_COOKIE_SECURE'] = True      # Only send over HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True    # Prevent Javascript access (XSS defense)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'   # Prevent CSRF leakage
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     "postgresql://postgres.ijbxuudpvxsjjdugewuj:SentinelSupport%2A2026@"
     "aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
@@ -376,11 +380,18 @@ def after_request(response):
 
 
 def get_current_tenant():
-    """Get current tenant ID from session, fallback to request only if needed"""
-    tenant_id = session.get('tenant_id')
-    if tenant_id:
-        return str(tenant_id)
-    return request.args.get('tenant') or request.form.get('tenant')
+    """Get current tenant ID and strictly enforce Integer type to prevent SQL injection"""
+    tenant_id = session.get('tenant_id') or request.args.get('tenant') or request.form.get('tenant')
+
+    if not tenant_id:
+        return None
+
+    try:
+        # 🔥 FIX: Strictly validate it is an integer.
+        # If a hacker passes "?tenant=1; DROP TABLE users", this int() cast will fail and block them.
+        return int(tenant_id)
+    except ValueError:
+        return None
 
 def get_tenant_upload_folder(tenant_id):
     """Get upload folder for specific tenant"""
@@ -2797,6 +2808,15 @@ scheduler = BackgroundScheduler()
 scheduler.start()
 
 
+@app.route('/api/tenant/<int:tenant_id>/backup-count')
+def api_backup_count(tenant_id):
+    """Lightweight endpoint for the frontend to check if a new backup was created"""
+    if str(session.get('tenant_id')) != str(tenant_id):
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    backups = get_tenant_backups(tenant_id)
+    return jsonify({'count': len(backups)})
+
 @app.route('/tenant/<int:tenant_id>/cleanup-retention')
 def run_retention_cleanup(tenant_id):
     if session.get('tenant_id') != tenant_id:
@@ -3265,6 +3285,43 @@ def tenant_deactivate(tenant_id):
                            tenant=tenant, stats=stats, form=form, tenant_id=tenant_id)
 
 
+@app.before_request
+def enforce_archived_tenant_readonly():
+    """Blocks active sessions from modifying data if the tenant is archived."""
+    tenant_id = session.get('tenant_id')
+
+    # Only enforce if a tenant user/admin is logged in
+    if tenant_id and session.get('user_type') in ['tenant_admin', 'user']:
+
+        # We only block data modifications (POST, PUT, DELETE)
+        # Standard page views (GET) are perfectly fine
+        if request.method not in ['POST', 'PUT', 'DELETE']:
+            return
+
+        # 🔥 WHITELIST: Safe actions the Admin MUST be allowed to do
+        safe_endpoints = [
+            'logout',
+            'login',
+            'tenant_recovery'  # They MUST be able to POST to the recovery route!
+        ]
+
+        if request.endpoint in safe_endpoints:
+            return
+
+        # Check tenant status
+        tenant = Tenant.query.get(tenant_id)
+        if tenant and not tenant.is_active:
+            # Block the action
+            if request.is_json:
+                return jsonify({"error": "Action denied. This workspace is archived (Read-Only)."}), 403
+            else:
+                flash("🚫 Action denied. This workspace is archived (Read-Only).", "danger")
+
+                # Redirect admins back to dashboard, users back to myfiles
+                if session.get('user_type') == 'tenant_admin':
+                    return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+                return redirect(url_for('myfiles'))
+
 #Setting Backup and Recovery customization settings
 
 
@@ -3646,10 +3703,29 @@ def login():
             tenant_id = user_location['tenant_id']
             print(f"🔍 Found email in tenant_{tenant_id}")
 
+
             # 1. Authenticate Password
             auth_result = authenticate_user(tenant_id, email_input, password_input)
 
             if auth_result:
+                # 🔥 ARCHIVED TENANT CHECK: Block normal users, Allow admins
+                tenant_record = Tenant.query.get(tenant_id)
+                if tenant_record and not tenant_record.is_active:
+                    if auth_result['role'] != 'admin':
+                        # Block normal user
+                        log_tenant_event(
+                            action_type='LOGIN_REJECTED_ARCHIVED',
+                            description=f"Login blocked: Tenant {tenant_id} is archived.",
+                            category='AUTHENTICATION',
+                            success=False,
+                            tenant_id=tenant_id
+                        )
+                        flash("🚫 This workspace has been archived. User logins are currently disabled.", "danger")
+                        return render_template('login/login_page.html', form=form)
+                    else:
+                        # Let admin through but give them a warning
+                        flash("⚠️ Workspace is archived. You are logged in with Read-Only Admin access.", "warning")
+
                 # 🔥 2. CHECK TENANT SECURITY POLICY
                 security_policy = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
                 # Default to False if no policy, otherwise respect DB setting
