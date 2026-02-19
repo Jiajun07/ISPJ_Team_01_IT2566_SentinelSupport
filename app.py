@@ -1,7 +1,7 @@
 # app.py
 
 #Note: All Log Audit Events is Gavier's. If have issues, just call me if urgent. I might not see the text
-
+import pytz
 import bcrypt
 import os
 import hashlib
@@ -2627,33 +2627,45 @@ def daily_retention_cleanup():
             print(f"❌ Cleanup failed for tenant_{tenant.id}: {e}")
 
 
-
-
-
 def scheduled_tenant_backups():
-    """Run scheduled backups for all tenants"""
-    configs = TenantBackupConfig.query.filter_by(enable_scheduled=True).all()
-    for config in configs:
-        if should_run_backup(config):
-            backup_file = backup_tenant(config.tenant_id)
-            if backup_file:
-                config.last_backup = datetime.now()
-                config.next_backup = calculate_next_backup(config.frequency, config.backup_time)
-                db.session.commit()
+    """Run scheduled backups for tenants at their custom set times"""
+    sgt = pytz.timezone('Asia/Singapore')
 
-# ✅ NEW - Staggered schedule
+    # Get current time in SGT (remove tzinfo to match DB naive datetime)
+    now = datetime.now(sgt).replace(tzinfo=None)
+
+    # Wrap in app context since this runs in a background thread
+    with app.app_context():
+        configs = TenantBackupConfig.query.filter_by(enable_scheduled=True).all()
+
+        for config in configs:
+            # Check if the current time has reached or passed the scheduled backup time
+            if config.next_backup and now >= config.next_backup:
+                print(f"⏰ Executing scheduled backup for Tenant {config.tenant_id}...")
+
+                # Trigger the backup
+                backup_file = backup_tenant(config.tenant_id)
+
+                if backup_file:
+                    config.last_backup = now
+                    # Calculate the NEXT time it should run based on their schedule
+                    config.next_backup = calculate_next_backup(config.frequency, config.backup_time)
+                    db.session.commit()
+                    print(f"✅ Next backup for Tenant {config.tenant_id} scheduled for {config.next_backup}")
+
+# 1. Keep Retention Cleanup running once a day at 2:00 AM
 scheduler.add_job(
     daily_retention_cleanup,
     'cron',
-    hour=2, minute=0,  # 2:00 AM - Cleanup first
+    hour=2, minute=0,
     id='retention_cleanup',
     replace_existing=True
 )
-
+# 🔥 2. NEW: Monitor Backups every 1 minute to catch custom times
 scheduler.add_job(
     scheduled_tenant_backups,
-    'cron',
-    hour=2, minute=15,  # 2:15 AM - Backups after cleanup
+    'interval',
+    minutes=1,  # Wakes up every minute to check if any tenant's time has arrived
     id='backup_scheduler',
     replace_existing=True
 )
@@ -3215,8 +3227,12 @@ def get_tenant_backups(tenant_id: int) -> list:
 
 
 def calculate_next_backup(frequency: str, time_str: str) -> datetime:
-    """Calculate next backup time"""
-    now = datetime.now()
+    """Calculate next backup time in SGT"""
+    import pytz
+    from datetime import datetime, timedelta
+    sgt = pytz.timezone('Asia/Singapore')
+
+    now = datetime.now(sgt)
     hour, minute = map(int, time_str.split(':'))
 
     if frequency == 'daily':
@@ -3225,18 +3241,18 @@ def calculate_next_backup(frequency: str, time_str: str) -> datetime:
             next_backup += timedelta(days=1)
     elif frequency == 'weekly':
         next_backup = now + timedelta(days=7 - now.weekday())
-        next_backup = next_backup.replace(hour=hour, minute=minute)
+        next_backup = next_backup.replace(hour=hour, minute=minute, second=0, microsecond=0)
     else:  # monthly
         if now.day <= 1:
-            next_backup = now.replace(day=1, hour=hour, minute=minute)
+            next_backup = now.replace(day=1, hour=hour, minute=minute, second=0, microsecond=0)
         else:
             next_month = now.month % 12 + 1
             next_year = now.year + (now.month // 12)
             next_backup = now.replace(year=next_year, month=next_month, day=1,
-                                      hour=hour, minute=minute)
+                                      hour=hour, minute=minute, second=0, microsecond=0)
 
-    return next_backup
-
+    # Return as a naive datetime object for the database
+    return next_backup.replace(tzinfo=None)
 
 @app.route('/tenant/<int:tenant_id>/security-baselines', methods=['GET', 'POST'])
 def tenant_security_baselines(tenant_id):
@@ -3299,6 +3315,7 @@ def tenant_security_baselines(tenant_id):
 
     return render_template('CompanyAdmin/security_baselines.html', form=form, tenant_id=tenant_id)
 
+
 @app.route('/tenant/<int:tenant_id>/backup-recovery', methods=['GET', 'POST'])
 def tenant_backup_recovery(tenant_id):
     if str(session.get('tenant_id')) != str(tenant_id):
@@ -3311,54 +3328,50 @@ def tenant_backup_recovery(tenant_id):
     action_form = BackupActionForm()
     backups = get_tenant_backups(tenant_id)
 
-    # Form 1: Settings ✅
-    if schedule_form.validate_on_submit() and schedule_form.save_settings.data:
-        if not config:
-            config = TenantBackupConfig(tenant_id=tenant_id)
-        schedule_form.populate_obj(config)
-        config.next_backup = calculate_next_backup(config.frequency, config.backup_time)
-        db.session.add(config)
-        db.session.commit()
-        flash("✅ Schedule updated!", "success")
-        return redirect(url_for('tenant_backup_recovery', tenant_id=tenant_id))
+    if request.method == 'POST':
+        # Form 1: Settings ✅ (Using WTForms)
+        if schedule_form.validate_on_submit() and schedule_form.save_settings.data:
+            if not config:
+                config = TenantBackupConfig(tenant_id=tenant_id)
+            schedule_form.populate_obj(config)
+            config.next_backup = calculate_next_backup(config.frequency, config.backup_time)
+            db.session.add(config)
+            db.session.commit()
+            flash("✅ Schedule updated!", "success")
+            return redirect(url_for('tenant_backup_recovery', tenant_id=tenant_id))
 
-    # Form 2: Actions ✅ FIXED
-    if action_form.validate_on_submit():
-        if action_form.backup_submit.data:
+        # Form 2: Actions ✅ (Using standard HTML request.form to bypass file upload requirements)
+        if 'backup_submit' in request.form:
             backup_file = backup_tenant(tenant_id)
             if backup_file:
                 flash(f"✅ Backup created!", "success")
             else:
                 flash("❌ Backup failed", "danger")
+            return redirect(url_for('tenant_backup_recovery', tenant_id=tenant_id))
 
-        elif action_form.restore_submit.data and action_form.backup_file.data:
-            uploaded_file = action_form.backup_file.data
+        elif 'restore_submit' in request.form:
+            # Get the filename selected from the dropdown
+            selected_file = request.form.get('selected_backup_file')
 
-            if uploaded_file and uploaded_file.filename:
-                # SAVE UPLOADED FILE
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                saved_filename = f"tenant_{tenant_id}_restore_{timestamp}.sql"
-                saved_path = f"backups/{saved_filename}"
+            if selected_file:
+                # Security Check: Ensure the file actually belongs to this tenant and exists
+                if selected_file.startswith(f"tenant_{tenant_id}") and os.path.exists(f"backups/{selected_file}"):
+                    print(f"💾 RESTORING FROM SERVER FILE: {selected_file}")
 
-                os.makedirs('backups', exist_ok=True)
-                uploaded_file.save(saved_path)
-
-                print(f"💾 SAVED: {saved_path}")
-
-                # RESTORE FROM SAVED FILE
-                result = restore_tenant_backup(tenant_id, saved_filename)
-                print(f"🔍 RESULT: {result}")
-                flash(result, "info")
+                    # Run the restore
+                    result = restore_tenant_backup(tenant_id, selected_file)
+                    flash(result, "info")
+                else:
+                    flash("❌ Invalid or missing backup file", "danger")
             else:
-                flash("❌ No file selected", "danger")
+                flash("❌ No backup selected from the dropdown", "danger")
 
-        return redirect(url_for('tenant_backup_recovery', tenant_id=tenant_id))
+            return redirect(url_for('tenant_backup_recovery', tenant_id=tenant_id))
 
     return render_template('CompanyAdmin/backup_recovery.html',
                            schedule_form=schedule_form,
                            action_form=action_form,
                            tenant=tenant, backups=backups, tenant_id=tenant_id)
-
 
 # 🔥 DOWNLOAD ROUTE (add this)
 @app.route('/tenant/<int:tenant_id>/backup-download/<path:filename>')
