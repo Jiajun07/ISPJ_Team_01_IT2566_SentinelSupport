@@ -1,243 +1,258 @@
 {% extends "base.html" %}
 {% block content %}
 
-<script>
-    document.body.classList.add("myfiles-body");
-</script>
+<style>
+    /* PURE CSS POPUPS */
+    .dlp-overlay {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(0,0,0,0.85); z-index: 999999;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .dlp-overlay-box {
+        background: #fff; padding: 40px; border-radius: 12px; text-align: center; max-width: 450px; width: 90%;
+        box-shadow: 0 15px 35px rgba(0,0,0,0.5); animation: popIn 0.3s ease-out forwards;
+    }
+    @keyframes popIn { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+    .dlp-btn {
+        background: #dc3545; color: white; border: none; padding: 14px 20px;
+        border-radius: 6px; font-weight: bold; font-size: 16px; cursor: pointer; width: 100%;
+    }
+    .dlp-btn:hover { background: #c82333; }
+</style>
 
-<div class="confirm-shell">
-    <aside class="side-rail">
-        <button type="button" class="upload-btn" onclick="window.location.href='/myfiles'">Upload File</button>
+<script>document.body.classList.add("myfiles-body");</script>
 
-        <nav class="rail-nav">
-            <button class="rail-link active" type="button" onclick="window.location.href='/myfiles'">
-                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-                </svg>
-                My files
-            </button>
-            <button class="rail-link" type="button">
-                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
-                    <circle cx="9" cy="7" r="4"/>
-                    <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
-                </svg>
-                Shared with me
-            </button>
-            <button class="rail-link" type="button">
-                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <polyline points="12 6 12 12 16 14"/>
-                </svg>
-                Recent
-            </button>
-            <button class="rail-link" type="button">
-                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="3 6 5 6 21 6"/>
-                    <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-                </svg>
-                Bin
-            </button>
-        </nav>
-    </aside>
+{% if blocked %}
+    <div class="dlp-overlay">
+        <div class="dlp-overlay-box">
+            <div style="font-size: 60px; margin-bottom: 15px; line-height: 1;">⛔</div>
+            <h2 style="color: #dc3545; margin-top: 0; font-weight: 800;">Upload Blocked</h2>
+            <p style="color: #333; margin-bottom: 25px; font-size: 16px; font-weight: 500;">
+                {{ block_message | default('Security policy violation.') }}
+            </p>
+            <p style="font-size: 13px; color: #6c757d; margin-bottom: 25px;">
+                This incident has been logged. Please contact your administrator if you believe this is an error.
+            </p>
+            <button type="button" class="dlp-btn" onclick="window.location.href='/myfiles'">OK, Return to My Files</button>
+        </div>
+    </div>
 
-    <section class="main-stage">
-        <div class="confirm-workspace">
-            <div class="confirm-body">
+{% else %}
 
-                <div id="dlp-status-container" style="margin-bottom: 20px; display: none;">
-                    <div id="dlp-status-alert" style="padding: 15px; border-radius: 6px; display: flex; align-items: center; gap: 15px;">
-                        <div id="dlp-icon" style="font-size: 24px;"></div>
-                        <div>
-                            <strong id="dlp-title" style="display: block; margin-bottom: 4px;"></strong>
-                            <span id="dlp-message" style="font-size: 0.9em;"></span>
-                        </div>
-                    </div>
-                </div>
+    <div id="frontend-block-screen" class="dlp-overlay" style="display: none;">
+        <div class="dlp-overlay-box">
+            <div style="font-size: 60px; margin-bottom: 15px; line-height: 1;">⛔</div>
+            <h2 style="color: #dc3545; margin-top: 0; font-weight: 800;">Upload Blocked</h2>
+            <p id="frontend-block-text" style="color: #333; margin-bottom: 25px; font-size: 16px; font-weight: 500;"></p>
+            <button type="button" class="dlp-btn" onclick="window.location.href='/myfiles'">OK, Return to My Files</button>
+        </div>
+    </div>
 
-                <div class="confirm-preview">
-                    <div class="confirm-file-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                            <polyline points="14 2 14 8 20 8"/>
-                        </svg>
-                    </div>
-                    <div class="confirm-meta">
-                        <div class="meta-row"><span class="meta-label">Name of file:</span><span class="meta-value">{{ file.name }}</span></div>
-                        <div class="meta-row"><span class="meta-label">Sensitivity:</span><span class="meta-value" id="sensitivity-display">(scanning...)</span></div>
-                        <div class="meta-row"><span class="meta-label">Owner:</span><span class="meta-value">{{ file.owner }}</span></div>
-                        <div class="meta-row"><span class="meta-label">Date Uploaded:</span><span class="meta-value">{{ file.modified }}</span></div>
-                        <div class="meta-row" style="font-size: 0.85rem; color: #999;">
-                            <span class="meta-label">Risk Score:</span>
-                            <span class="meta-value" id="risk-score-display">-</span>
-                        </div>
-                    </div>
-                </div>
+    <div id="frontend-warn-screen" class="dlp-overlay" style="display: none;">
+        <div class="dlp-overlay-box">
+            <div style="font-size: 60px; margin-bottom: 15px; line-height: 1;">⚠️</div>
+            <h2 style="color: #f57c00; margin-top: 0; font-weight: 800;">Security Warning</h2>
+            <p id="frontend-warn-text" style="color: #333; margin-bottom: 15px; font-size: 16px; font-weight: 500;"></p>
+            <p style="font-size: 14px; color: #6c757d; margin-bottom: 25px;">Are you sure you want to proceed with uploading this sensitive file?</p>
 
-                <form class="confirm-form" method="POST">
-                    <input type="hidden" name="tenant" value="{{ request.args.get('tenant', '1') }}">
-                    <input type="hidden" name="risk_type" id="risk-type-field" value="">
-                    {% if is_version %}
-                    <input type="hidden" name="original_filename" value="{{ original_filename }}">
-                    {% endif %}
-
-                    <div class="form-grid">
-                        <label class="form-field">
-                            <span class="field-label">File name</span>
-                            <input type="text" name="name" value="{{ file.name }}" required>
-                        </label>
-                        <label class="form-field">
-                            <span class="field-label">Sensitivity</span>
-                            <input type="text" name="sensitivity" id="sensitivity-input" placeholder="e.g., Public / Internal / Confidential">
-                        </label>
-                        <label class="form-field">
-                            <span class="field-label">Owner</span>
-                            <input type="text" name="owner" value="{{ file.owner }}">
-                        </label>
-                        <label class="form-field">
-                            <span class="field-label">Notes</span>
-                            <input type="text" name="notes" placeholder="Optional notes">
-                        </label>
-
-                        <div id="justification-container" style="display: none; grid-column: 1 / -1; margin-top: 10px;">
-                            <label class="form-field" style="width: 100%;">
-                                <span class="field-label" style="color: #f57c00; font-weight: bold;">⚠️ Business Justification Required</span>
-                                <textarea name="justification" id="justification-input" rows="3"
-                                    placeholder="Please explain why you are uploading this sensitive document..."
-                                    style="width: 100%; padding: 10px; border: 1px solid #f57c00; border-radius: 4px;"></textarea>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="confirm-actions">
-                        <button type="submit" id="confirm-btn" class="primary-btn">Confirm Upload</button>
-                    </div>
-                </form>
+            <div style="display: flex; gap: 10px;">
+                <button type="button" class="dlp-btn" style="background: #6c757d;" onclick="window.location.href='/myfiles'">No, Cancel</button>
+                <button type="button" class="dlp-btn" style="background: #f57c00;" onclick="forceSubmit()">Yes, Upload</button>
             </div>
         </div>
-    </section>
-</div>
+    </div>
 
-<script>
-    // Get temp_id and tenant from page
-    const tempId = "{{ file.temp_id }}";
-    const currentTenant = "{{ request.args.get('tenant', '1') }}";
-    const confirmBtn = document.getElementById('confirm-btn');
-    const justificationContainer = document.getElementById('justification-container');
-    const justificationInput = document.getElementById('justification-input');
-    const statusContainer = document.getElementById('dlp-status-container');
-    const statusAlert = document.getElementById('dlp-status-alert');
-    const statusIcon = document.getElementById('dlp-icon');
-    const statusTitle = document.getElementById('dlp-title');
-    const statusMessage = document.getElementById('dlp-message');
+    <div class="confirm-shell">
+        <aside class="side-rail">
+            <button type="button" class="upload-btn" onclick="window.location.href='/myfiles'">Upload File</button>
+            <nav class="rail-nav">
+                <button class="rail-link active" type="button" onclick="window.location.href='/myfiles'">
+                    <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                    My files
+                </button>
+            </nav>
+        </aside>
 
-    // Scan file with DLP on page load
-    document.addEventListener('DOMContentLoaded', async () => {
-        // Disable button while scanning
-        confirmBtn.disabled = true;
-        confirmBtn.innerText = "Scanning...";
-        await scanFileWithDLP();
-    });
+        <section class="main-stage">
+            <div class="confirm-workspace">
+                <div class="confirm-body">
+                    <div id="dlp-status-container" style="margin-bottom: 20px; display: none;">
+                        <div id="dlp-status-alert" style="padding: 15px; border-radius: 6px; display: flex; align-items: center; gap: 15px;">
+                            <div id="dlp-icon" style="font-size: 24px;"></div>
+                            <div>
+                                <strong id="dlp-title" style="display: block; margin-bottom: 4px;"></strong>
+                                <span id="dlp-message" style="font-size: 0.9em;"></span>
+                            </div>
+                        </div>
+                    </div>
 
-    async function scanFileWithDLP() {
-        try {
-            const response = await fetch(`/scan/dlp/${tempId}?tenant=${currentTenant}`);
-            const data = await response.json();
+                    <div class="confirm-preview">
+                        <div class="confirm-file-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
+                            </svg>
+                        </div>
+                        <div class="confirm-meta">
+                            <div class="meta-row"><span class="meta-label">Name of file:</span><span class="meta-value">{{ file.name }}</span></div>
+                            <div class="meta-row"><span class="meta-label">Sensitivity:</span><span class="meta-value" id="sensitivity-display">(scanning...)</span></div>
+                            <div class="meta-row"><span class="meta-label">Owner:</span><span class="meta-value">{{ file.owner }}</span></div>
+                            <div class="meta-row"><span class="meta-label">Date Uploaded:</span><span class="meta-value">{{ file.modified }}</span></div>
+                            <div class="meta-row" style="font-size: 0.85rem; color: #999;">
+                                <span class="meta-label">Risk Score:</span>
+                                <span class="meta-value" id="risk-score-display">-</span>
+                            </div>
+                        </div>
+                    </div>
 
-            if (data.success) {
-                updateMetaData(data);
-                handleDlpEnforcement(data);
-            } else {
-                showStatus("Error", "Error scanning file", "#f44336", "#ffebee", "❌");
-                confirmBtn.disabled = false;
-                confirmBtn.innerText = "Confirm Upload";
-            }
-        } catch (error) {
-            console.error('DLP scanning error:', error);
-            showStatus("Error", "Connection failed", "#f44336", "#ffebee", "❌");
-            confirmBtn.disabled = false;
-            confirmBtn.innerText = "Confirm Upload";
-        }
-    }
+                    <form class="confirm-form" method="POST" id="main-confirm-form">
+                        <input type="hidden" name="tenant" value="{{ request.args.get('tenant', '1') }}">
+                        <input type="hidden" name="risk_type" id="risk-type-field" value="">
 
-    function updateMetaData(data) {
-        // Update display with sensitivity and risk info
-        document.getElementById('sensitivity-display').textContent = data.sensitivity;
-        document.getElementById('sensitivity-input').value = data.sensitivity;
-        document.getElementById('risk-score-display').textContent = `${data.riskScore}% (${data.riskLevel})`;
-        document.getElementById('risk-type-field').value = data.riskLevel;
+                        <div class="form-grid">
+                            <label class="form-field">
+                                <span class="field-label">File name</span>
+                                <input type="text" name="name" value="{{ file.name }}" required>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">Sensitivity</span>
+                                <input type="text" name="sensitivity" id="sensitivity-input" placeholder="e.g., Public / Internal / Confidential">
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">Owner</span>
+                                <input type="text" name="owner" value="{{ file.owner }}">
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">Notes</span>
+                                <input type="text" name="notes" placeholder="Optional notes">
+                            </label>
 
-        // Apply visual styling based on risk level
-        const sensitivityDisplay = document.getElementById('sensitivity-display');
-        sensitivityDisplay.style.fontWeight = '600';
+                            <div id="justification-container" style="display: none; grid-column: 1 / -1; margin-top: 10px;">
+                                <label class="form-field" style="width: 100%;">
+                                    <span class="field-label" style="color: #f57c00; font-weight: bold;">⚠️ Business Justification Required</span>
+                                    <textarea name="justification" id="justification-input" rows="3" placeholder="Please explain why you are uploading this sensitive document..." style="width: 100%; padding: 10px; border: 1px solid #f57c00; border-radius: 4px;"></textarea>
+                                </label>
+                            </div>
+                        </div>
 
-        const riskColors = {
-            'Restricted': '#d32f2f',
-            'Confidential': '#f57c00',
-            'Internal': '#fbc02d',
-            'Public': '#388e3c'
-        };
+                        <div class="confirm-actions">
+                            <button type="button" id="confirm-btn" class="primary-btn" onclick="handleConfirmClick()">Confirm Upload</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </section>
+    </div>
 
-        sensitivityDisplay.style.color = riskColors[data.sensitivity] || '#333';
-        const riskScoreDisplay = document.getElementById('risk-score-display');
-        riskScoreDisplay.style.color = riskColors[data.sensitivity] || '#999';
-    }
+    <script>
+        const tempId = "{{ file.temp_id }}";
+        const currentTenant = "{{ request.args.get('tenant', '1') }}";
+        const confirmBtn = document.getElementById('confirm-btn');
+        const mainForm = document.getElementById('main-confirm-form');
 
-    function handleDlpEnforcement(data) {
-        const action = data.action; // BLOCK, JUSTIFY, WARN, MONITOR
+        // Tracking Variables
+        let isWarnActive = false;
+        let warnMessage = "";
 
-        // Default state
-        confirmBtn.disabled = false;
-        confirmBtn.innerText = "Confirm Upload";
-        justificationContainer.style.display = 'none';
-
-        switch (action) {
-            case "BLOCK":
-                showStatus("Upload Blocked", data.message, "#721c24", "#f8d7da", "⛔");
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (confirmBtn) {
                 confirmBtn.disabled = true;
-                confirmBtn.innerText = "Upload Blocked by Policy";
-                confirmBtn.style.backgroundColor = "#6c757d";
-                confirmBtn.style.cursor = "not-allowed";
-                break;
+                confirmBtn.innerText = "Scanning...";
+            }
+            await scanFileWithDLP();
+        });
 
-            case "JUSTIFY":
-                showStatus("Justification Required", data.message, "#856404", "#fff3cd", "⚠️");
-                // Enable Justification Logic
-                justificationContainer.style.display = 'block';
-                justificationInput.required = true;
-                confirmBtn.disabled = true; // Disabled until typed
+        // 🔥 Intercept the button click
+        function handleConfirmClick() {
+            // 1. Verify required form fields are filled
+            if (!mainForm.checkValidity()) {
+                mainForm.reportValidity();
+                return;
+            }
 
-                justificationInput.addEventListener('input', function() {
-                    if (this.value.trim().length > 0) {
-                        confirmBtn.disabled = false;
-                    } else {
-                        confirmBtn.disabled = true;
-                    }
-                });
-                break;
-
-            case "WARN":
-                showStatus("Warning", data.message, "#856404", "#fff3cd", "🛡️");
-                break;
-
-            case "MONITOR":
-            default:
-                // Optional: Show success message or hide completely
-                // showStatus("Scan Complete", data.message, "#155724", "#d4edda", "✅");
-                statusContainer.style.display = 'none';
-                break;
+            // 2. If WARN policy is active, show the Yes/No Popup instead of submitting
+            if (isWarnActive) {
+                document.getElementById('frontend-warn-text').textContent = warnMessage;
+                document.getElementById('frontend-warn-screen').style.display = 'flex';
+            }
+            // 3. Otherwise, submit normally
+            else {
+                mainForm.submit();
+            }
         }
-    }
 
-    function showStatus(title, message, color, bgColor, icon) {
-        statusContainer.style.display = 'block';
-        statusAlert.style.backgroundColor = bgColor;
-        statusAlert.style.color = color;
-        statusAlert.style.border = `1px solid ${color}`;
-        statusTitle.textContent = title;
-        statusMessage.textContent = message;
-        statusIcon.textContent = icon;
-    }
-</script>
+        // 🔥 Forces the upload if user clicks "Yes" on the overlay
+        function forceSubmit() {
+            isWarnActive = false; // Disable warning trap
+            document.getElementById('frontend-warn-screen').style.display = 'none'; // Hide overlay
+            mainForm.submit(); // Send to backend
+        }
 
+        async function scanFileWithDLP() {
+            try {
+                const response = await fetch(`/scan/dlp/${tempId}?tenant=${currentTenant}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    updateMetaData(data);
+                    handleDlpEnforcement(data);
+                } else {
+                    showStatus("Error", data.error || "Error scanning file", "#f44336", "#ffebee", "❌");
+                    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerText = "Confirm Upload"; }
+                }
+            } catch (error) {
+                console.error('DLP scanning error:', error);
+                showStatus("Error", "Connection failed", "#f44336", "#ffebee", "❌");
+                if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerText = "Confirm Upload"; }
+            }
+        }
+
+        function updateMetaData(data) {
+            document.getElementById('sensitivity-display').textContent = data.sensitivity;
+            document.getElementById('sensitivity-input').value = data.sensitivity;
+            document.getElementById('risk-score-display').textContent = `${data.riskScore}% (${data.riskLevel})`;
+            document.getElementById('risk-type-field').value = data.riskLevel;
+
+            const riskColors = { 'Restricted': '#d32f2f', 'Confidential': '#f57c00', 'Internal': '#fbc02d', 'Public': '#388e3c' };
+            document.getElementById('sensitivity-display').style.color = riskColors[data.sensitivity] || '#333';
+            document.getElementById('sensitivity-display').style.fontWeight = '600';
+            document.getElementById('risk-score-display').style.color = riskColors[data.sensitivity] || '#999';
+        }
+
+        function handleDlpEnforcement(data) {
+            if(confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerText = "Confirm Upload"; }
+
+            if (data.action === "BLOCK") {
+                document.getElementById('frontend-block-text').textContent = data.message;
+                document.getElementById('frontend-block-screen').style.display = 'flex';
+                document.getElementById('main-confirm-form').style.display = 'none';
+            }
+            else if (data.action === "JUSTIFY") {
+                showStatus("Justification Required", data.message, "#856404", "#fff3cd", "⚠️");
+                document.getElementById('justification-container').style.display = 'block';
+                const justInput = document.getElementById('justification-input');
+                justInput.required = true;
+                if(confirmBtn) confirmBtn.disabled = true;
+                justInput.addEventListener('input', function() { if(confirmBtn) confirmBtn.disabled = (this.value.trim().length === 0); });
+            }
+            else if (data.action === "WARN") {
+                // 🔥 Turn on the Warn Trap
+                isWarnActive = true;
+                warnMessage = data.message;
+                showStatus("Warning", data.message + " You will be prompted before uploading.", "#856404", "#fff3cd", "🛡️");
+            }
+            else {
+                document.getElementById('dlp-status-container').style.display = 'none';
+            }
+        }
+
+        function showStatus(title, message, color, bgColor, icon) {
+            document.getElementById('dlp-status-container').style.display = 'block';
+            const alert = document.getElementById('dlp-status-alert');
+            alert.style.backgroundColor = bgColor; alert.style.color = color; alert.style.border = `1px solid ${color}`;
+            document.getElementById('dlp-title').textContent = title;
+            document.getElementById('dlp-message').textContent = message;
+            document.getElementById('dlp-icon').textContent = icon;
+        }
+    </script>
+{% endif %}
 {% endblock %}

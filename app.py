@@ -311,6 +311,7 @@ app.register_blueprint(export_bp, url_prefix='/export')
 csrf = CSRFProtect(app)
 
 
+
 # Global error handler for database transaction errors
 @app.errorhandler(Exception)
 def handle_exception(e):
@@ -1672,6 +1673,59 @@ def send_share_email():
         return jsonify({'error': str(e)}), 500
 
 
+# ==========================================
+# 🔥 NEW: Centralized DLP Enforcement Helper
+# ==========================================
+def check_dlp_enforcement(file_path, tenant_id, original_filename):
+    """
+    Scans a file and determines the enforcement action based on TenantSecurity policy.
+    Returns: (action, message, risk_level, risk_result)
+    """
+    action = "MONITOR"
+    message = "File is safe."
+    risk_level = "Low"
+    risk_result = {}
+
+    try:
+        # 1. Extract Text & Scan Content
+        with open(file_path, "rb") as f:
+            from werkzeug.datastructures import FileStorage
+            file_obj = FileStorage(stream=f, filename=original_filename)
+
+            if not fileProcessor.passedProcessing(file_obj):
+                return "MONITOR", "File type skipped", "Low", {}
+
+            extracted_text = fileProcessor.readTextFromFile(file_obj)
+
+        if extracted_text:
+            matches = dlpScanner.scan_text(extracted_text)
+            risk_result = dlpScanner.calculateRisk(matches)
+            # Safe get to prevent 'NoneType' errors if scanner returns None
+            if risk_result:
+                risk_level = risk_result.get("level", "Low")
+
+    except Exception as e:
+        print(f"🔥 DLP Backend Crash Prevented: {e}")
+        return "MONITOR", "Scan Error (Passed to Monitoring)", "Low", {}
+
+    # 3. Check Database Policy
+    security_policy = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
+    if not security_policy:
+        security_policy = TenantSecurity(dlp_monitor_only=True)
+
+    # 4. Determine Action
+    if risk_level in ["Critical", "High", "Medium"]:
+        if security_policy.dlp_block_action:
+            action = "BLOCK"
+            message = f"⛔ Upload Blocked: File contains {risk_level} risk data."
+        elif security_policy.dlp_require_approval:
+            action = "JUSTIFY"
+            message = f"⚠️ Justification Required: {risk_level} risk detected."
+        elif security_policy.dlp_notify_user:
+            action = "WARN"
+            message = "🛡️ Caution: Sensitive data involved."
+
+    return action, message, risk_level, risk_result
 def _pending_path(temp_id):
     """Find pending file by temp_id, accounting for tenant prefix"""
     for fname in os.listdir(app.config['PENDING_FOLDER']):
@@ -1801,98 +1855,102 @@ def confirm_upload(temp_id):
     tenant_id = get_current_tenant()
     user_email = session.get('email', 'Unknown')
     user_id = session.get('user_id', 0)
-    
+
     pending_path = _pending_path(temp_id)
     if not pending_path or not os.path.exists(pending_path):
-        log_tenant_event(
-            action_type='FILE_UPLOAD_CONFIRMATION_FAILED',
-            description=f"File upload confirmation failed: Pending file not found (temp_id: {temp_id})",
-            category='FILE_MANAGEMENT',
-            success=False,
-            tenant_id=tenant_id
-        )
-        return "Pending file not found", 404
+        flash("File timeout or not found.", "danger")
+        return redirect(url_for('myfiles'))
 
     pending_file = os.path.basename(pending_path)
-    original_name = pending_file.split("__", 1)[1]
+    original_name = pending_file.split("__", 1)[1] if "__" in pending_file else pending_file
     size = os.path.getsize(pending_path)
     file_hash = compute_sha256(pending_path)
     modified = datetime.fromtimestamp(os.path.getmtime(pending_path)).strftime('%d %B %Y')
 
     if request.method == 'POST':
-        target_name = request.form.get('name') or original_name
-        target_safe = sanitize_filename(target_name)
-        
-        # Read file data for database storage
-        with open(pending_path, 'rb') as f:
-            file_data = f.read()
-        
-        # Get metadata from form first
-        sensitivity = (request.form.get('sensitivity') or 'Public').strip()
-        notes = (request.form.get('notes') or '').strip()
-        risk_type = (request.form.get('risk_type') or '').strip()
-        
-        log_audit_event(
-            action_type='FILE_UPLOAD_CONFIRMED',
-            description=f"File upload confirmed and saved: {target_safe}",
-            category='FILE_MANAGEMENT',
-            target_resource='FILE',
-            tenant_id=tenant_id,
-            resource_id=target_safe,
-            additional_data={
-                'file_size': size,
-                'file_hash': file_hash[:16],
-                'sensitivity': sensitivity or "Unclassified",
-                'temp_id': temp_id
-            }
-        )
+        # 1. ENFORCE DLP BASELINE CHECK
+        action, message, risk_level, _ = check_dlp_enforcement(pending_path, tenant_id, original_name)
 
-        # Determine MIME type
-        import mimetypes
-        mime_type, _ = mimetypes.guess_type(target_safe)
-        if not mime_type:
-            mime_type = 'application/octet-stream'
-        
-        # Store file in database
-        result = store_file_in_db(
-            tenant_id=tenant_id,
-            file_data=file_data,
-            filename=target_safe,
-            owner_user_id=user_id,
-            owner_email=user_email,
-            file_hash=file_hash,
-            mime_type=mime_type,
-            sensitivity=sensitivity,
-            classification=risk_type if risk_type else None,
-            notes=notes
-        )
-        
-        # Clean up pending file
+        # 🛑 2. IF BLOCKED: Delete file and force the HTML Popup Response
+        if action == "BLOCK":
+            log_tenant_event('DLP_UPLOAD_BLOCKED', f"Blocked {original_name} ({risk_level})", 'SECURITY',
+                             tenant_id=tenant_id, user_id=user_id, success=False)
+            try:
+                os.remove(pending_path)
+            except:
+                pass
+
+            # FOOLPROOF POPUP RESPONSE
+            return f"""
+            <html><head><title>Blocked</title><style>
+                body {{ font-family: sans-serif; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
+                .box {{ background: white; padding: 40px; border-radius: 12px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-width: 450px; width: 90%; }}
+                h2 {{ color: #dc3545; margin-top: 10px; font-weight: 800; }}
+                p {{ color: #333; font-size: 16px; font-weight: 500; margin-bottom: 25px; }}
+                .sub {{ font-size: 13px; color: #6c757d; margin-bottom: 25px; }}
+                .btn {{ background: #dc3545; color: white; border: none; padding: 14px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; text-decoration: none; display: block; box-sizing: border-box; }}
+                .btn:hover {{ background: #c82333; }}
+            </style></head><body>
+                <div class="box">
+                    <div style="font-size: 60px; line-height: 1; margin-bottom: 15px;">⛔</div>
+                    <h2>Upload Blocked</h2>
+                    <p>{message}</p>
+                    <div class="sub">This incident has been logged. Please contact your administrator if you believe this is an error.</div>
+                    <a href="/myfiles" class="btn">OK, Return to My Files</a>
+                </div>
+            </body></html>
+            """, 403
+
+        # ⚠️ JUSTIFY
+        justification = request.form.get('justification', '').strip()
+        if action == "JUSTIFY" and not justification:
+            flash("❌ Justification is required for this file.", "danger")
+            return redirect(f"/upload/confirm/{temp_id}?tenant={tenant_id}")
+
+        notes = request.form.get('notes', '').strip()
+        if justification:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            notes = f"[JUSTIFICATION {timestamp}]: {justification}\n{notes}"
+
+        # Proceed to Save
         try:
-            os.remove(pending_path)
-        except:
-            pass
-        
-        if result.get('success'):
-            flash(f"✅ File '{target_safe}' uploaded successfully!", "success")
-            return redirect(url_for('file_detail', filename=target_safe, tenant=tenant_id))
-        else:
-            flash(f"❌ Failed to upload file: {result.get('error')}", "danger")
+            with open(pending_path, 'rb') as f:
+                file_data = f.read()
+
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(original_name)
+
+            from werkzeug.utils import secure_filename
+            result = store_file_in_db(
+                tenant_id=tenant_id, file_data=file_data,
+                filename=secure_filename(request.form.get('name') or original_name),
+                owner_user_id=user_id, owner_email=user_email,
+                file_hash=file_hash, mime_type=mime_type or 'application/octet-stream',
+                sensitivity=request.form.get('sensitivity', 'Public'),
+                classification=request.form.get('risk_type'), notes=notes
+            )
+
+            try:
+                os.remove(pending_path)
+            except:
+                pass
+
+            if result.get('success'):
+                flash(f"✅ File uploaded successfully!", "success")
+            else:
+                flash(f"❌ Upload failed: {result.get('error')}", "danger")
+
             return redirect(url_for('myfiles'))
 
-    return render_template(
-        "users/confirm_upload.html",
-        file={
-            "temp_id": temp_id,
-            "name": original_name,
-            "size": size,
-            "hash": file_hash,
-            "modified": modified,
-            "owner": user_email,
-            "uploaded_by": user_email
-        }
-    )
+        except FileNotFoundError:
+            flash("File processed or not found.", "danger")
+            return redirect(url_for('myfiles'))
 
+    # GET Request
+    return render_template("users/confirm_upload.html", file={
+        "temp_id": temp_id, "name": original_name, "size": size,
+        "hash": file_hash, "modified": modified, "owner": user_email
+    })
 
 @app.route('/scan/dlp/<temp_id>', methods=['GET'])
 @csrf.exempt
@@ -1900,101 +1958,48 @@ def scan_dlp_temp_file(temp_id):
     """Scan a temporary file with DLP scanner and apply Tenant Security Policies."""
     tenant_id = get_current_tenant()
 
-    # 1. Locate file
     pending_path = _pending_path(temp_id)
     if not pending_path or not os.path.exists(pending_path):
         return jsonify({"error": "File not found"}), 404
 
-    try:
-        pending_file = os.path.basename(pending_path)
-        original_name = pending_file.split("__", 1)[1] if "__" in pending_file else pending_file
+    pending_file = os.path.basename(pending_path)
+    original_name = pending_file.split("__", 1)[1] if "__" in pending_file else pending_file
 
-        # 2. Extract Text (Handles PDFs, DOCX, and Images via OCR)
-        with open(pending_path, "rb") as f:
-            from werkzeug.datastructures import FileStorage
-            file = FileStorage(stream=f, filename=original_name)
+    # 🔥 USE HELPER
+    action, message, risk_level, risk_result = check_dlp_enforcement(pending_path, tenant_id, original_name)
 
-            # [cite_start]Check if file type is supported [cite: 96]
-            if not fileProcessor.passedProcessing(file):
-                return jsonify({"error": "File type not supported for DLP scanning."}), 400
+    # Trigger Incident Logging immediately if policy requires it
+    security_policy = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
+    if security_policy and security_policy.dlp_trigger_incident and risk_level in ["Critical", "High", "Medium"]:
+        log_tenant_event(
+            action_type='DLP_INCIDENT_TRIGGERED',
+            description=f"🚨 DLP VIOLATION: {original_name} contains {risk_level} risk data.",
+            category='SECURITY_INCIDENT',
+            target_resource='FILE',
+            resource_id=original_name,
+            tenant_id=tenant_id,
+            additional_data={'risk_score': risk_result.get("score", 0)}
+        )
 
-            # [cite_start]Extract text (triggers OCR if image) [cite: 99, 101]
-            extracted_text = fileProcessor.readTextFromFile(file)
+    # Return to Frontend
+    risk_to_sensitivity = {
+        "Critical": "Restricted", "High": "Confidential",
+        "Medium": "Internal", "Low": "Public"
+    }
+    sensitivity = risk_to_sensitivity.get(risk_level, "Public")
 
-        # 3. Perform Scan
-        matches = []
-        risk_level = "Low"
-        risk_result = {}
+    return jsonify({
+        "success": True,
+        "riskLevel": risk_level,
+        "riskScore": risk_result.get("score", 0),
+        "sensitivity": sensitivity,
+        "totalMatches": risk_result.get("total_matches", 0),
+        "severityBreakdown": risk_result.get("severity_breakdown", {}),
 
-        if extracted_text:
-            matches = dlpScanner.scan_text(extracted_text)
-            risk_result = dlpScanner.calculateRisk(matches)
-            risk_level = risk_result.get("level", "Low")
-
-        # 4. Apply Tenant Security Policies
-        # Fetch current settings from database
-        security_policy = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
-        if not security_policy:
-            security_policy = TenantSecurity(dlp_monitor_only=True)  # Default fallback
-
-        # Default Response
-        action = "MONITOR"
-        message = "File is safe."
-
-        # Only apply restrictions if Risk is NOT Low
-        if risk_level in ["Critical", "High", "Medium"]:
-
-            # Policy A: Trigger Incident (Background Logging)
-            if security_policy.dlp_trigger_incident:
-                log_tenant_event(
-                    action_type='DLP_INCIDENT_TRIGGERED',
-                    description=f"🚨 DLP VIOLATION: {original_name} contains {risk_level} risk data.",
-                    category='SECURITY_INCIDENT',
-                    target_resource='FILE',
-                    resource_id=original_name,
-                    tenant_id=tenant_id,
-                    additional_data={'risk_score': risk_result.get("score", 0)}
-                )
-
-            # Policy B: Determine User Action (Hierarchy: Block > Justify > Notify > Monitor)
-            if security_policy.dlp_block_action:
-                action = "BLOCK"
-                message = f"⛔ Upload Blocked: File contains {risk_level} risk data. Policy prohibits this."
-
-            elif security_policy.dlp_require_approval:
-                action = "JUSTIFY"
-                message = f"⚠️ Warning: {risk_level} risk data detected. Business justification required."
-
-            elif security_policy.dlp_notify_user:
-                action = "WARN"
-                message = "🛡️ Caution: This action involves sensitive data. Proceed only if necessary."
-
-            else:
-                action = "MONITOR"
-                message = "File scanned. Event logged."
-
-        # 5. Return JSON
-        risk_to_sensitivity = {
-            "Critical": "Restricted", "High": "Confidential",
-            "Medium": "Internal", "Low": "Public"
-        }
-        sensitivity = risk_to_sensitivity.get(risk_level, "Public")
-
-        return jsonify({
-            "success": True,
-            "riskLevel": risk_level,
-            "riskScore": risk_result.get("score", 0),
-            "sensitivity": sensitivity,
-            "totalMatches": risk_result.get("total_matches", 0),
-            "severityBreakdown": risk_result.get("severity_breakdown", {}),
-
-            # Frontend uses these to block buttons or show textareas
-            "action": action,
-            "message": message
-        }), 200
-
-    except Exception as e:
-        return jsonify({"error": f"DLP scanning failed: {str(e)}"}), 500
+        # ACTION & MESSAGE for Frontend Logic
+        "action": action,
+        "message": message
+    }), 200
 
 @app.route('/upload/version/temp/<path:filename>', methods=['POST'])
 @csrf.exempt
@@ -3372,9 +3377,7 @@ def login():
 
         print(f"🔍 Login attempt: {email_input}")
 
-        # ---------------------------------------------------------
         # ✅ PATH 0: SUPERADMIN (System Level)
-        # ---------------------------------------------------------
         superadmin = authenticate_superadmin(email_input, password_input)
         if superadmin:
             session.clear()
@@ -3396,32 +3399,56 @@ def login():
             flash("🛡️ Superadmin access granted", "success")
             return redirect(url_for('superadmincontrolpanel'))
 
-        # ---------------------------------------------------------
         # ✅ UNIFIED PATH: TENANT USERS & ADMINS
-        # ---------------------------------------------------------
-        # 1. Search for the user across all tenants
         user_location = find_user_by_email(email_input)
 
         if user_location:
             tenant_id = user_location['tenant_id']
             print(f"🔍 Found email in tenant_{tenant_id}")
 
-            # 2. Authenticate using the specific tenant's schema
-            # This checks the password and returns the full user object including 'role'
+            # 1. Authenticate Password
             auth_result = authenticate_user(tenant_id, email_input, password_input)
 
             if auth_result:
-                # 3. Check for USB MFA
-                from usb_mfa import USBMFAManager
-                
-                usb_mfa_valid = USBMFAManager.find_and_validate_usb_mfa(
-                    auth_result['user_id'],
-                    tenant_id,
-                    email_input
-                )
-                
-                if usb_mfa_valid:
-                    # 🔥 USB MFA validated - proceed with full login
+                # 🔥 2. CHECK TENANT SECURITY POLICY
+                security_policy = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
+                # Default to False if no policy, otherwise respect DB setting
+                mfa_enabled = security_policy.mfa_enabled if security_policy else False
+
+                mfa_passed = False
+
+                # 3. MFA CHECK (Only if enabled in baseline)
+                if mfa_enabled:
+                    from usb_mfa import USBMFAManager
+
+                    # Check USB MFA first
+                    if USBMFAManager.find_and_validate_usb_mfa(auth_result['user_id'], tenant_id, email_input):
+                        mfa_passed = True
+                        log_tenant_event('LOGIN_SUCCESS_USB_MFA', f"User logged in via USB MFA: {email_input}",
+                                         'AUTHENTICATION', tenant_id=tenant_id, user_id=auth_result['user_id'])
+                    else:
+                        # Fallback to Email 2FA (Redirect to verify page)
+                        print(f"🔄 No USB MFA found, falling back to email 2FA for {email_input}")
+                        session.clear()
+                        session['temp_user_email'] = email_input
+                        session['temp_user_id'] = auth_result['user_id']
+                        session['temp_tenant_id'] = tenant_id
+                        session['tenant_id'] = tenant_id
+                        session['user_type'] = 'tenant_admin' if auth_result['role'] == 'admin' else 'user'
+                        session['needs_2fa'] = True
+                        session.permanent = True
+
+                        send_2fa_email(email_input)
+                        flash("🔑 MFA Enabled: Enter the 2FA code sent to your email.", "info")
+                        return redirect(url_for('verify_2fa'))
+                else:
+                    # MFA Disabled by Policy -> Pass immediately
+                    mfa_passed = True
+                    log_tenant_event('LOGIN_SUCCESS_NO_MFA', f"User logged in (MFA Policy Disabled): {email_input}",
+                                     'AUTHENTICATION', tenant_id=tenant_id, user_id=auth_result['user_id'])
+
+                # 4. FINALIZE LOGIN (If MFA passed or was disabled)
+                if mfa_passed:
                     session.clear()
                     session['user_id'] = auth_result['user_id']
                     session['email'] = auth_result['email']
@@ -3432,56 +3459,21 @@ def login():
                     session['logged_in'] = True
                     session.permanent = True
 
-                    log_tenant_event(
-                        action_type='LOGIN_SUCCESS_USB_MFA',
-                        description=f"User logged in via USB MFA: {email_input} ({auth_result['role']})",
-                        category='AUTHENTICATION',
-                        tenant_id=tenant_id,
-                        user_id=auth_result['user_id']
-                    )
-
                     if auth_result['role'] == 'admin':
-                        flash(f"✅ Welcome Admin! USB MFA verified (Tenant {tenant_id})", "success")
+                        flash(f"✅ Welcome Admin! (Tenant {tenant_id})", "success")
                         return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
                     else:
-                        flash(f"✅ Welcome back! USB MFA verified (Tenant {tenant_id})", "success")
+                        flash(f"✅ Welcome back! (Tenant {tenant_id})", "success")
                         return redirect(url_for('myfiles'))
-                else:
-                    # USB MFA not detected, fall back to email 2FA
-                    print(f"🔄 No USB MFA found, falling back to email 2FA for {email_input}")
-                    session.clear()
-                    session['temp_user_email'] = email_input
-                    session['temp_user_id'] = auth_result['user_id']
-                    session['temp_tenant_id'] = tenant_id
-                    session['tenant_id'] = tenant_id
-                    session['user_type'] = 'tenant_admin' if auth_result['role'] == 'admin' else 'user'
-                    session['needs_2fa'] = True
-                    session.permanent = True
-                    
-                    send_2fa_email(email_input)
-                    flash("🔑 USB MFA not detected. Enter 2FA code from your email.", "info")
-                    return redirect(url_for('verify_2fa'))
 
             else:
-                # User found, but password incorrect
-                log_tenant_event(
-                    action_type='LOGIN_FAILED',
-                    description=f"Login failed (password): {email_input}",
-                    category='AUTHENTICATION',
-                    success=False,
-                    tenant_id=tenant_id
-                )
+                log_tenant_event('LOGIN_FAILED', f"Login failed (password): {email_input}", 'AUTHENTICATION',
+                                 success=False, tenant_id=tenant_id)
                 flash("❌ Invalid email or password.", "danger")
-                print(f"❌ Password mismatch for {email_input}")
-
         else:
-            # User not found in any tenant
-            flash("❌ Invalid email or password.", "danger")
-            print(f"❌ User not found: {email_input}")
+            flash("❌ User not found.", "danger")
 
     return render_template('login/login_page.html', form=form)
-
-
 # ==================== USB MFA MANAGEMENT ROUTES ====================
 
 @app.route('/settings/usb-mfa/generate', methods=['POST'])
