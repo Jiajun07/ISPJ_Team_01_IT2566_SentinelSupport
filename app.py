@@ -3085,6 +3085,43 @@ def tenant_deactivate(tenant_id):
                            tenant=tenant, stats=stats, form=form, tenant_id=tenant_id)
 
 
+@app.before_request
+def enforce_archived_tenant_readonly():
+    """Blocks active sessions from modifying data if the tenant is archived."""
+    tenant_id = session.get('tenant_id')
+
+    # Only enforce if a tenant user/admin is logged in
+    if tenant_id and session.get('user_type') in ['tenant_admin', 'user']:
+
+        # We only block data modifications (POST, PUT, DELETE)
+        # Standard page views (GET) are perfectly fine
+        if request.method not in ['POST', 'PUT', 'DELETE']:
+            return
+
+        # 🔥 WHITELIST: Safe actions the Admin MUST be allowed to do
+        safe_endpoints = [
+            'logout',
+            'login',
+            'tenant_recovery'  # They MUST be able to POST to the recovery route!
+        ]
+
+        if request.endpoint in safe_endpoints:
+            return
+
+        # Check tenant status
+        tenant = Tenant.query.get(tenant_id)
+        if tenant and not tenant.is_active:
+            # Block the action
+            if request.is_json:
+                return jsonify({"error": "Action denied. This workspace is archived (Read-Only)."}), 403
+            else:
+                flash("🚫 Action denied. This workspace is archived (Read-Only).", "danger")
+
+                # Redirect admins back to dashboard, users back to myfiles
+                if session.get('user_type') == 'tenant_admin':
+                    return redirect(url_for('tenant_dashboard', tenant_id=tenant_id))
+                return redirect(url_for('myfiles'))
+
 #Setting Backup and Recovery customization settings
 
 
@@ -3466,10 +3503,29 @@ def login():
             tenant_id = user_location['tenant_id']
             print(f"🔍 Found email in tenant_{tenant_id}")
 
+
             # 1. Authenticate Password
             auth_result = authenticate_user(tenant_id, email_input, password_input)
 
             if auth_result:
+                # 🔥 ARCHIVED TENANT CHECK: Block normal users, Allow admins
+                tenant_record = Tenant.query.get(tenant_id)
+                if tenant_record and not tenant_record.is_active:
+                    if auth_result['role'] != 'admin':
+                        # Block normal user
+                        log_tenant_event(
+                            action_type='LOGIN_REJECTED_ARCHIVED',
+                            description=f"Login blocked: Tenant {tenant_id} is archived.",
+                            category='AUTHENTICATION',
+                            success=False,
+                            tenant_id=tenant_id
+                        )
+                        flash("🚫 This workspace has been archived. User logins are currently disabled.", "danger")
+                        return render_template('login/login_page.html', form=form)
+                    else:
+                        # Let admin through but give them a warning
+                        flash("⚠️ Workspace is archived. You are logged in with Read-Only Admin access.", "warning")
+
                 # 🔥 2. CHECK TENANT SECURITY POLICY
                 security_policy = TenantSecurity.query.filter_by(tenant_id=tenant_id).first()
                 # Default to False if no policy, otherwise respect DB setting
